@@ -457,6 +457,13 @@ class EventSanitizer:
             categories_prop = ICalGLib.Property.new_categories("CALENDAR-SYNC-MANAGED")
             event.add_property(categories_prop)
 
+            # Mark event as private so other users with read access to the
+            # target calendar cannot see its title or details.
+            # CLASS:PRIVATE is honoured by both Exchange/M365 ("Private
+            # Appointment") and Google Calendar ("Private" visibility).
+            cls._remove_all_properties(event, ICalGLib.PropertyKind.CLASS_PROPERTY)
+            event.add_property(ICalGLib.Property.new_from_string("CLASS:PRIVATE"))
+
         # Check if comp is a VCALENDAR or a VEVENT directly
         if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
             # Strip the METHOD property from the VCALENDAR wrapper.

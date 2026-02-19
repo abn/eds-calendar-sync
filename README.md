@@ -328,6 +328,7 @@ Events synced from work to personal calendar:
 **Modified Properties:**
 - **UID**: Regenerated as UUIDv4 (bypasses Microsoft's UID rewriting)
 - **CATEGORIES**: Set to "CALENDAR-SYNC-MANAGED" (for identification)
+- **CLASS**: Set to `PRIVATE` — Exchange/M365 shows this as "Private Appointment" (no title/details to other users); Google Calendar marks it as "Private" visibility
 
 ### Skipped Events
 
