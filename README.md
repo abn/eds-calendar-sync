@@ -334,6 +334,7 @@ Events synced from work to personal calendar:
 The following events are silently skipped (not synced, no error counted):
 
 - **Cancelled events** (`STATUS:CANCELLED`): No longer block time; Exchange rejects creating them as new items.
+- **Transparent / free-time events** (`TRANSP:TRANSPARENT`): The event does not mark the user as busy, so it should not appear as a busy block in the personal calendar. Exchange automatically sets `TRANSP:TRANSPARENT` when you decline a meeting; it can also be set manually on optional or informational events.
 - **Empty recurring series**: Recurring events where every occurrence is excluded by `EXDATE` (the series expands to zero valid instances). Exchange cannot create a series with no occurrences.
 
 ### Personal → Work Sanitization

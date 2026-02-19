@@ -622,6 +622,31 @@ class CalendarSynchronizer:
             val = status_prop.get_value_as_string() or ''
             return val.strip().upper() == 'CANCELLED'
 
+    def _is_free_time(self, comp: ICalGLib.Component) -> bool:
+        """Return True if the event is transparent (does not block time).
+
+        TRANSP:TRANSPARENT means the event does not show the user as busy.
+        In Exchange this is set automatically when you decline a meeting, and
+        can also be set manually on informational/optional events.  Either
+        way, transparent events should not be mirrored as busy blocks in the
+        personal calendar.
+
+        The iCal default (no TRANSP property) is OPAQUE, which blocks time.
+        """
+        check = comp
+        if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            check = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+            if not check:
+                return False
+        transp_prop = check.get_first_property(ICalGLib.PropertyKind.TRANSP_PROPERTY)
+        if not transp_prop:
+            return False  # Default is OPAQUE — event blocks time
+        try:
+            return transp_prop.get_transp() == ICalGLib.PropertyTransp.TRANSPARENT
+        except (AttributeError, TypeError):
+            val = transp_prop.get_value_as_string() or ''
+            return val.strip().upper() == 'TRANSPARENT'
+
     def _perform_refresh(self, personal_client: EDSCalendarClient, state_db: StateDatabase):
         """Delete only synced events we created, leaving other events untouched."""
         self.logger.warning("REFRESH MODE: Removing synced events and clearing state...")
@@ -1672,6 +1697,13 @@ class CalendarSynchronizer:
                     # calendar.
                     if self._is_event_cancelled(comp):
                         self.logger.debug(f"Skipping cancelled event: {base_uid}")
+                        continue
+
+                    # Skip transparent (free-time) events — they do not block the
+                    # user's time so they should not appear as busy in the personal
+                    # calendar.  Exchange marks declined meetings as transparent.
+                    if self._is_free_time(comp):
+                        self.logger.debug(f"Skipping transparent (free-time) event: {base_uid}")
                         continue
 
                     # Skip recurring events where every occurrence is excluded
