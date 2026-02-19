@@ -1,0 +1,43 @@
+[Unit]
+Description=EDS Calendar Sync (Bidirectional)
+Documentation=https://github.com/abn/eds-calendar-sync
+After=network-online.target gnome-online-accounts.service evolution-data-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# IMPORTANT: Use --yes flag for non-interactive mode
+# Option 1: Use config file (recommended)
+ExecStart=%h/.local/bin/eds-calendar-sync.py --yes
+
+# Option 2: Use explicit calendar UIDs (uncomment and modify)
+# ExecStart=%h/.local/bin/eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+
+# Option 3: One-way sync modes (uncomment one if needed)
+# ExecStart=%h/.local/bin/eds-calendar-sync.py --only-to-personal --yes
+# ExecStart=%h/.local/bin/eds-calendar-sync.py --only-to-work --yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=eds-calendar-sync
+
+# Restart policy (retry on failure after 5 minutes)
+Restart=on-failure
+RestartSec=5m
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/eds-calendar-sync-state.db %h/.cache/evolution %h/.local/share/evolution
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# Resource limits
+CPUQuota=50%
+MemoryMax=500M
+TasksMax=50
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,22 @@
+[Unit]
+Description=EDS Calendar Sync Timer (every 15 minutes)
+Documentation=https://github.com/your-repo/eds-calendar-sync
+
+[Timer]
+# Run 2 minutes after boot (wait for network and EDS to be ready)
+OnBootSec=2min
+
+# Then every 15 minutes
+OnUnitActiveSec=15min
+
+# Add random delay up to 1 minute to avoid thundering herd
+RandomizedDelaySec=1min
+
+# Persist timer state across reboots (run missed timers on boot)
+Persistent=true
+
+# Run immediately if the last run was too long ago
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

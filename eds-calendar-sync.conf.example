@@ -1,0 +1,13 @@
+# Calendar Sync Configuration
+# Copy this file to ~/.config/eds-calendar-sync.conf and customize
+
+[calendar-sync]
+# EDS calendar UID for work calendar (Exchange/Outlook/Microsoft 365)
+# Use list-calendars.py to find your calendar UIDs
+work_calendar_id = YOUR_WORK_CALENDAR_UID_HERE
+
+# EDS calendar UID for personal calendar (Google/Personal)
+personal_calendar_id = YOUR_PERSONAL_CALENDAR_UID_HERE
+
+# Optional: Specify state database path
+# state_db_path = ~/.local/share/eds-calendar-sync-state.db
