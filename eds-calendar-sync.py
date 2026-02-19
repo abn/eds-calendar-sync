@@ -405,6 +405,12 @@ class EventSanitizer:
         # Properties to strip for security/privacy
         # Note: We strip these specific properties and retain everything else
         # (SUMMARY, DTSTART, DTEND, RRULE, EXDATE, etc. are kept by default)
+        #
+        # RECURRENCE-ID is stripped to make each event standalone in the target
+        # calendar. Exception occurrences from recurring series (which carry
+        # RECURRENCE-ID) are created as ordinary one-off events so the target
+        # Exchange/CalDAV backend does not reject them with "ExpandSeries can
+        # only be performed against a series".
         strip_props = [
             ICalGLib.PropertyKind.DESCRIPTION_PROPERTY,
             ICalGLib.PropertyKind.LOCATION_PROPERTY,
@@ -412,6 +418,18 @@ class EventSanitizer:
             ICalGLib.PropertyKind.URL_PROPERTY,
             ICalGLib.PropertyKind.ORGANIZER_PROPERTY,
             ICalGLib.PropertyKind.ATTENDEE_PROPERTY,
+            ICalGLib.PropertyKind.RECURRENCEID_PROPERTY,
+            # Strip STATUS so Exchange creates the event as a plain appointment
+            # rather than attempting to process it as a meeting response.
+            # STATUS:CANCELLED events are skipped entirely before sanitize.
+            ICalGLib.PropertyKind.STATUS_PROPERTY,
+            # Strip all vendor/server-specific X- extension properties.
+            # Exchange embeds X-MS-OLK-*, X-MICROSOFT-CDO-*, and
+            # X-MS-EXCHANGE-ORGANIZATION-* properties that can reference
+            # internal Exchange objects in the source tenant.  Keeping them
+            # causes ErrorItemNotFound when the target Exchange server tries
+            # to resolve those references.
+            ICalGLib.PropertyKind.X_PROPERTY,
         ]
 
         def sanitize_vevent(event):
@@ -441,6 +459,13 @@ class EventSanitizer:
 
         # Check if comp is a VCALENDAR or a VEVENT directly
         if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            # Strip the METHOD property from the VCALENDAR wrapper.
+            # METHOD:CANCEL or METHOD:REQUEST causes Exchange to treat the
+            # create request as a meeting response and attempt to look up the
+            # original meeting in the target calendar, resulting in
+            # ErrorItemNotFound when the meeting doesn't exist there.
+            cls._remove_all_properties(comp, ICalGLib.PropertyKind.METHOD_PROPERTY)
+
             # Process all VEVENT components inside VCALENDAR
             event = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
             while event:
@@ -518,6 +543,84 @@ class CalendarSynchronizer:
         if isinstance(obj, str):
             return ICalGLib.Component.new_from_string(obj)
         return obj
+
+    def _has_valid_occurrences(self, comp: ICalGLib.Component) -> bool:
+        """Return False if a recurring event expands to zero non-excluded occurrences.
+
+        Exchange rejects creating a recurring series that has all its occurrences
+        excluded by EXDATE (ErrorItemNotFound), so we detect and skip such events
+        before attempting creation.
+
+        Returns True for non-recurring events and on any API error (safe fallback).
+        """
+        check = comp
+        if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            check = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+            if not check:
+                return True
+
+        rrule_prop = check.get_first_property(ICalGLib.PropertyKind.RRULE_PROPERTY)
+        if not rrule_prop:
+            return True  # Non-recurring event always has a valid "occurrence"
+
+        # Collect excluded dates as YYYYMMDD strings for quick lookup
+        exdates = set()
+        prop = check.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+        while prop:
+            try:
+                t = prop.get_exdate()
+                if t and not t.is_null_time():
+                    exdates.add(
+                        f"{t.get_year():04d}{t.get_month():02d}{t.get_day():02d}"
+                    )
+            except Exception:
+                pass
+            prop = check.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+
+        if not exdates:
+            return True  # No exclusions → series has occurrences
+
+        # Expand the recurrence rule and check whether any occurrence falls
+        # outside the EXDATE set.  Cap at 500 iterations as a safety measure.
+        try:
+            rule = rrule_prop.get_rrule()
+            dtstart = check.get_dtstart()
+            it = ICalGLib.RecurIterator.new(rule, dtstart)
+            for _ in range(500):
+                occ = it.next()
+                if occ is None or occ.is_null_time():
+                    break
+                occ_key = (
+                    f"{occ.get_year():04d}{occ.get_month():02d}{occ.get_day():02d}"
+                )
+                if occ_key not in exdates:
+                    return True  # Found at least one valid occurrence
+        except Exception:
+            return True  # On any API error assume valid — don't silently skip
+
+        return False  # Every expanded occurrence is in EXDATE
+
+    def _is_event_cancelled(self, comp: ICalGLib.Component) -> bool:
+        """Return True if the event's STATUS is CANCELLED.
+
+        Cancelled events are not synced: they no longer block time, and
+        Exchange rejects creating STATUS:CANCELLED items via CreateItem
+        (it tries to cancel an existing meeting that does not exist in the
+        target calendar, returning ErrorItemNotFound).
+        """
+        check = comp
+        if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            check = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+            if not check:
+                return False
+        status_prop = check.get_first_property(ICalGLib.PropertyKind.STATUS_PROPERTY)
+        if not status_prop:
+            return False
+        try:
+            return status_prop.get_status() == ICalGLib.PropertyStatus.CANCELLED
+        except (AttributeError, TypeError):
+            val = status_prop.get_value_as_string() or ''
+            return val.strip().upper() == 'CANCELLED'
 
     def _perform_refresh(self, personal_client: EDSCalendarClient, state_db: StateDatabase):
         """Delete only synced events we created, leaving other events untouched."""
@@ -790,6 +893,11 @@ class CalendarSynchronizer:
             self.stats.added += 1
             self.logger.debug(f"Created event {work_uid} as {personal_uid}")
         except (GLib.Error, CalendarSyncError) as e:
+            if 'sanitized' in locals():
+                self.logger.warning(
+                    f"Sanitized iCal for failed event {work_uid}:\n"
+                    f"{sanitized.as_ical_string()}"
+                )
             self.logger.error(f"Failed to create event {work_uid}: {e}")
             self.stats.errors += 1
 
@@ -1555,7 +1663,38 @@ class CalendarSynchronizer:
                 self.logger.info(f"Processing {len(work_events)} work events...")
                 for obj in work_events:
                     comp = self._parse_component(obj)
-                    work_uid = comp.get_uid()
+                    base_uid = comp.get_uid()
+
+                    # Skip cancelled events entirely.  They no longer block time
+                    # and Exchange rejects creating them via CreateItem.  Their
+                    # absence from work_uids_seen will cause _process_deletions
+                    # to remove any previously synced copy from the personal
+                    # calendar.
+                    if self._is_event_cancelled(comp):
+                        self.logger.debug(f"Skipping cancelled event: {base_uid}")
+                        continue
+
+                    # Skip recurring events where every occurrence is excluded
+                    # by EXDATE (the series expands to zero instances).  Exchange
+                    # rejects creating such an empty series with ErrorItemNotFound.
+                    if not self._has_valid_occurrences(comp):
+                        self.logger.debug(
+                            f"Skipping empty recurring series "
+                            f"(all occurrences excluded by EXDATE): {base_uid}"
+                        )
+                        continue
+
+                    # Exception occurrences of a recurring series share the same
+                    # UID as the master VEVENT but carry a RECURRENCE-ID property.
+                    # Build a compound state key so master and each exception are
+                    # tracked independently (avoids duplicate-UID collisions).
+                    rid_prop = comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY)
+                    if rid_prop:
+                        rid_str = rid_prop.get_recurrenceid().as_ical_string()
+                        work_uid = f"{base_uid}::RID::{rid_str}"
+                    else:
+                        work_uid = base_uid
+
                     work_uids_seen.add(work_uid)
 
                     ical_str = comp.as_ical_string()

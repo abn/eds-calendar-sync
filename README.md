@@ -320,10 +320,21 @@ Events synced from work to personal calendar:
 - **URL**: Meeting links
 - **VALARM**: Alarms/reminders (prevents duplicate notifications)
 - **CATEGORIES**: Original categories (replaced with sync marker)
+- **RECURRENCE-ID**: Occurrence marker (makes exceptions standalone events)
+- **STATUS**: Meeting status (prevents Exchange treating events as responses)
+- **X-* properties**: All vendor extensions (e.g. `X-MS-OLK-*`, `X-MICROSOFT-CDO-*`) that reference source-tenant Exchange objects
+- **METHOD** *(VCALENDAR level)*: Prevents Exchange treating the create as a meeting invite or cancellation
 
 **Modified Properties:**
 - **UID**: Regenerated as UUIDv4 (bypasses Microsoft's UID rewriting)
 - **CATEGORIES**: Set to "CALENDAR-SYNC-MANAGED" (for identification)
+
+### Skipped Events
+
+The following events are silently skipped (not synced, no error counted):
+
+- **Cancelled events** (`STATUS:CANCELLED`): No longer block time; Exchange rejects creating them as new items.
+- **Empty recurring series**: Recurring events where every occurrence is excluded by `EXDATE` (the series expands to zero valid instances). Exchange cannot create a series with no occurrences.
 
 ### Personal → Work Sanitization
 Events synced from personal to work calendar (maximum privacy):
@@ -337,7 +348,7 @@ Events synced from personal to work calendar (maximum privacy):
 
 **Stripped/Modified:**
 - **SUMMARY**: Replaced with "Busy" (title removed for privacy)
-- All other properties same as work→personal sanitization
+- All other properties stripped as per work→personal sanitization above
 
 ## Metadata Tagging
 
@@ -370,7 +381,7 @@ This SQLite database tracks:
 ```sql
 CREATE TABLE sync_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_uid TEXT NOT NULL,        -- Work calendar event UID
+    source_uid TEXT NOT NULL,        -- Work event UID (or UID::RID::date for recurring exceptions)
     target_uid TEXT NOT NULL,        -- Personal calendar event UID
     source_hash TEXT NOT NULL,       -- Work event content hash
     target_hash TEXT NOT NULL,       -- Personal event content hash (sanitized)
@@ -451,6 +462,24 @@ journalctl --user -u eds-calendar-sync.service -n 100
 # 3. Config file missing - ensure ~/.config/eds-calendar-sync.conf exists
 # 4. EDS not running - check GNOME Calendar is set up
 ```
+
+### Exchange/M365 Create Errors
+
+If you see errors like:
+
+```
+ERROR: Failed to create event ...: e-m365-error-quark: Cannot create calendar object: ErrorItemNotFound (2)
+ERROR: Failed to create event ...: ExpandSeries can only be performed against a series. (400)
+```
+
+These are Exchange-specific rejections. Common causes and what the tool does automatically:
+
+| Exchange Error | Cause | Handling |
+|---|---|---|
+| `ExpandSeries can only be performed against a series` | RECURRENCE-ID present (exception occurrence without master series in target) | Stripped from sanitized event |
+| `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, empty RRULE+EXDATE series, or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped |
+
+If errors persist, run with `--verbose` — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
 
 ### Verbose Debugging
 

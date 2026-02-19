@@ -186,6 +186,9 @@ eds-calendar-sync.py --refresh --yes       # Execute
 | Attendees | ❌ Removed | ❌ Removed |
 | Organizer | ❌ Removed | ❌ Removed |
 | Reminders | ❌ Removed | ❌ Removed |
+| Status / X-properties | ❌ Removed | ❌ Removed |
+| Cancelled events | ⏭ Skipped | ⏭ Skipped |
+| Empty recurring series | ⏭ Skipped | ⏭ Skipped |
 
 ## Daily Usage
 
