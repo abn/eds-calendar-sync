@@ -140,21 +140,23 @@ Override: `--state-db PATH`
 
 ```sql
 CREATE TABLE IF NOT EXISTS sync_state (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_uid    TEXT    NOT NULL,  -- work event UID (or personal UID when origin='target')
-    target_uid    TEXT    NOT NULL,  -- personal event UID (or work UID when origin='target')
-    source_hash   TEXT    NOT NULL,  -- hash of the source (work) event
-    target_hash   TEXT    NOT NULL,  -- hash of the target (personal) event
-    origin        TEXT    NOT NULL,  -- 'source' = work is authoritative, 'target' = personal is authoritative
-    created_at    INTEGER NOT NULL,  -- Unix timestamp of first sync
-    last_sync_at  INTEGER NOT NULL,  -- Unix timestamp of last sync
-    UNIQUE(source_uid, target_uid)
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_calendar_id     TEXT    NOT NULL,  -- EDS source UID of the work calendar
+    personal_calendar_id TEXT    NOT NULL,  -- EDS source UID of the personal calendar
+    source_uid           TEXT    NOT NULL,  -- work event UID (or UID::RID::date for exceptions)
+    target_uid           TEXT    NOT NULL,  -- personal event UID
+    source_hash          TEXT    NOT NULL,  -- hash of the work event iCal
+    target_hash          TEXT    NOT NULL,  -- hash of the personal event iCal (sanitized version)
+    origin               TEXT    NOT NULL,  -- 'source' = work authoritative, 'target' = personal authoritative
+    created_at           INTEGER NOT NULL,  -- Unix timestamp of first sync
+    last_sync_at         INTEGER NOT NULL,  -- Unix timestamp of last sync
+    UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
 );
 ```
 
-Note: despite the generic `source`/`target` column names, in practice `source_uid` always refers
-to the **work** calendar UID and `target_uid` to the **personal** calendar UID. The `origin` field
-encodes which calendar is authoritative for that pair.
+Records are partitioned by `(work_calendar_id, personal_calendar_id)` so a single DB can safely
+serve multiple calendar pairs without interference. `clear` and `refresh` only affect the pair
+currently specified via flags / config.
 
 ### 5.3 Change Detection and Volatile Property Normalization
 
@@ -201,7 +203,12 @@ Respects direction:
 ### 6.4 Clear (`clear` subcommand)
 
 Removes all managed events we created (identified via CATEGORIES scan) and clears the state DB.
-Does **not** resync afterward. Respects direction flags to limit which calendar is cleared.
+Does **not** resync afterward.
+
+Scope flags (distinct from the `--to-personal`/`--to-work` direction flags used by `sync`/`refresh`):
+- `--personal`: remove managed events from the personal calendar only (created by work→personal sync)
+- `--work`: remove managed events from the work calendar only (created by personal→work sync)
+- *(no flag)*: remove from both calendars (default)
 
 ### 6.5 Status (`status` subcommand)
 
@@ -218,13 +225,41 @@ Read-only. Renders two sections without touching EDS event data:
 Uses `query_status_all_pairs()` in `db.py` — a raw `sqlite3` query that does not instantiate
 `StateDatabase` and does not require knowing the calendar pair in advance.
 
-### 6.6 Confirmation Prompt
+### 6.6 Interactive Sync Wizard (`sync` with no arguments)
 
-By default, the tool displays sync configuration and prompts `Proceed with sync? [y/N]` before
-making changes. This is skipped automatically when:
+When `sync` is invoked with no calendar or direction flags, a three-step wizard runs:
+
+1. **Work calendar** — numbered EDS calendar picker (config file value shown as hint)
+2. **Personal calendar** — same picker
+3. **Sync direction** — `1 ↔ Bidirectional` (default) / `2 → Work→Personal` / `3 ← Personal→Work`
+
+Wizard selections imply `--yes`, so the normal "Proceed?" prompt is suppressed.
+The wizard is bypassed whenever any of `--work-calendar`, `--personal-calendar`,
+`--to-personal`, or `--to-work` is present.
+
+### 6.7 Migrate (`migrate` subcommand)
+
+Updates calendar source UIDs in the state DB after a GOA reconnection. Operates
+directly on the raw SQLite schema (no `StateDatabase` context needed) and replaces
+the old UID in **both** `work_calendar_id` and `personal_calendar_id` columns.
+
+Three modes:
+
+| Invocation | Behaviour |
+|-----------|-----------|
+| `migrate` (no args) | **Audit mode**: queries all distinct UIDs from the DB, resolves each against EDS, displays an audit table with ✓ Active / ✗ Missing status, then for each missing UID shows the EDS picker and prompts for a replacement (0 to skip) |
+| `migrate OLD` | Shows EDS picker, user selects replacement |
+| `migrate OLD NEW` | Replaces immediately without prompting |
+
+All modes accept `--dry-run`.
+
+### 6.8 Confirmation Prompt
+
+By default, the tool displays sync configuration and prompts `Proceed? [y/N]` before making
+changes. This is skipped automatically when:
 - `--yes` / `-y` is passed
 - `--dry-run` is active
-- Running non-interactively (EOF on stdin raises an error instructing the user to pass `--yes`)
+- The interactive sync wizard was used (wizard selections serve as confirmation)
 
 
 ## 7. CLI Reference
@@ -245,15 +280,15 @@ eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND [OPTIONS
 
 | Command | Description |
 |---------|-------------|
-| `sync` | Synchronise calendars (bidirectional by default) |
+| `sync` | Synchronise calendars (interactive wizard when called with no args) |
 | `refresh` | Remove synced events then re-sync |
-| `clear` | Remove all synced events without re-syncing |
-| `migrate` | Update calendar IDs in state DB after GOA reconnection |
+| `clear` | Remove managed events without re-syncing |
+| `migrate [OLD [NEW]]` | Update calendar IDs in state DB (audit/interactive/direct modes) |
 | `status` | Show config, resolved calendar names, and per-pair DB summary |
 | `calendars` | List all configured EDS calendars |
 | `inspect UID` | Inspect / debug events in a calendar |
 
-### Options for `sync` / `refresh` / `clear`
+### Options for `sync` / `refresh`
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
@@ -263,8 +298,43 @@ eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND [OPTIONS
 | `--to-work` | | flag | off | One-way: personal → work only |
 | `--dry-run` | `-n` | flag | off | Preview changes without writing |
 | `--yes` | `-y` | flag | off | Skip confirmation prompt |
+| `--keep-reminders` | | flag | off | Preserve VALARM reminders (stripped by default) |
 
-`--to-personal` and `--to-work` are mutually exclusive.
+`--to-personal` and `--to-work` are mutually exclusive. Calling `sync` with none of
+`--work-calendar`, `--personal-calendar`, `--to-personal`, `--to-work` launches the
+interactive wizard (see §6.6).
+
+### Options for `clear`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--work-calendar UID` | `-w` | str | — | EDS source UID for work calendar |
+| `--personal-calendar UID` | `-p` | str | — | EDS source UID for personal calendar |
+| `--personal` | | flag | off | Clear personal calendar only (work→personal events) |
+| `--work` | | flag | off | Clear work calendar only (personal→work events) |
+| `--dry-run` | `-n` | flag | off | Preview changes without writing |
+| `--yes` | `-y` | flag | off | Skip confirmation prompt |
+
+`--personal` and `--work` are mutually exclusive; omitting both clears both calendars.
+
+### Options for `migrate`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `OLD` (positional) | str | — | Calendar UID to replace (omit for audit mode) |
+| `NEW` (positional) | str | — | Replacement UID (omit for interactive picker) |
+| `--dry-run` | flag | off | Preview without writing |
+
+### Options for `inspect`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `CALENDAR_UID` (positional) | str | required | EDS source UID to inspect |
+| `--title TEXT` | str | — | Filter events by SUMMARY substring |
+| `--uid TEXT` | str | — | Filter events by UID substring |
+| `--no-raw` | flag | off | Omit raw iCal output |
+| `--exceptions-only` | flag | off | Show only RECURRENCE-ID exception events |
+| `--masters-only` | flag | off | Show only master (non-exception) events |
 
 ### 7.1 Config File Format
 

@@ -39,7 +39,7 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 ## Requirements
 
 - **Operating System**: Fedora (or any Linux with GNOME)
-- **Python**: 3.9+
+- **Python**: 3.13+
 - **System Libraries**:
   - `evolution-data-server` (usually pre-installed with GNOME)
   - `python3-gobject` (PyGObject)
@@ -53,29 +53,19 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 # Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Install Poetry if you don't have it
-pipx install poetry          # or: curl -sSL https://install.python-poetry.org | python3 -
-
-# Install the project into a managed virtual environment
-poetry install
+# Install into your user path (recommended — editable install)
+pip install --user -e .
 ```
 
 > **Note on PyGObject:** `python3-gobject` provides the `gi` module as a compiled system
-> package that cannot be replicated by the PyPI wheel alone. `poetry.toml` configures the
-> project venv with `system-site-packages = true` so the venv can see the system `gi`
-> automatically — no extra steps needed.
+> package. It must be installed via your distro package manager rather than pip.
 
-Once installed, prefix commands with `poetry run`, or activate the venv once:
+Alternatively, manage dependencies with Poetry (Poetry 2.x required):
 
 ```bash
-poetry shell                          # activate the venv in your current shell
-eds-calendar-sync --help              # works directly while the shell is active
-```
-
-Or run without activating:
-
-```bash
-poetry run eds-calendar-sync --help
+pipx install poetry
+poetry install                        # creates a venv with system-site-packages enabled
+poetry shell                          # activate the venv, then run eds-calendar-sync directly
 ```
 
 ## Configuration
@@ -112,16 +102,31 @@ personal_calendar_id = 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 
 ### Interactive First-Time Sync (Recommended)
 
-The tool shows calendar names and asks for confirmation before syncing:
+Run `sync` with no arguments to launch a three-step wizard that lets you pick
+the calendar pair and sync direction from a numbered list:
 
 ```bash
-# Dry run to preview (no confirmation needed)
+eds-calendar-sync sync
+```
+
+The wizard walks through:
+1. **Work calendar** — pick from all EDS calendars (config file value shown as hint)
+2. **Personal calendar** — same picker
+3. **Sync direction** — `↔ Bidirectional` (default), `→ Work→Personal`, `← Personal→Work`
+
+After making your selections the tool displays the configuration and proceeds
+(no extra "Proceed?" prompt — selections serve as confirmation).
+
+To pass calendars explicitly instead:
+
+```bash
+# Dry run to preview
 eds-calendar-sync sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193 \
   --dry-run
 
-# Actual sync (will prompt for confirmation)
+# Actual sync (prompts for confirmation)
 eds-calendar-sync sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
@@ -185,11 +190,23 @@ Original (non-synced) events are always preserved.
 
 #### Clear (Remove All Synced Events)
 ```bash
-# Remove all events created by this tool (no resync)
-eds-calendar-sync clear --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+# Remove managed events from both calendars (default)
+eds-calendar-sync clear --yes
+
+# Remove only events created by work→personal sync (in personal calendar)
+eds-calendar-sync clear --personal --yes
+
+# Remove only events created by personal→work sync (in work calendar)
+eds-calendar-sync clear --work --yes
 ```
 
-Like `refresh` but without resyncing. Also respects sync direction.
+Like `refresh` but without resyncing. Use `--personal` or `--work` to restrict
+which calendar is cleared; the default clears both.
+
+> **Note:** `clear` uses `--personal` / `--work` (describing the *target* calendar)
+> rather than the `--to-personal` / `--to-work` flags used by `sync` and `refresh`
+> (which describe *sync direction*). The semantics are equivalent but the flag names
+> are clearer for a cleanup operation.
 
 ### Configuration File Usage
 
@@ -224,13 +241,22 @@ Commands:
   calendars   List all configured EDS calendars
   inspect     Inspect / debug events in a calendar
 
-Options for sync / refresh / clear:
+Options for sync / refresh:
   --work-calendar, -w UID     Work calendar EDS UID (overrides config)
   --personal-calendar, -p UID Personal calendar EDS UID (overrides config)
   --to-personal               One-way: work → personal only
   --to-work                   One-way: personal → work only
   --dry-run, -n               Preview changes without applying them
   --yes, -y                   Skip confirmation prompt (required for automation)
+  --keep-reminders            Preserve VALARM reminders (stripped by default)
+
+Options for clear:
+  --work-calendar, -w UID     Work calendar EDS UID (overrides config)
+  --personal-calendar, -p UID Personal calendar EDS UID (overrides config)
+  --personal                  Clear personal calendar only (work→personal events)
+  --work                      Clear work calendar only (personal→work events)
+  --dry-run, -n               Preview changes without applying them
+  --yes, -y                   Skip confirmation prompt
 ```
 
 ## Systemd Timer Setup
@@ -516,29 +542,36 @@ When a GNOME Online Accounts connection is removed and re-added, EDS may assign 
 calendar sources. Use the `migrate` subcommand to update the state database without losing sync
 history or triggering a full resync.
 
+`migrate` has three modes:
+
+**Audit mode (no arguments) — recommended after a GOA reconnect:**
 ```bash
-# Step 1: Find the new UIDs
-eds-calendar-sync calendars
-
-# Step 2: Preview the migration (dry run)
-eds-calendar-sync migrate --dry-run \
-    --old-work OLD_WORK_UID --new-work NEW_WORK_UID \
-    --old-personal OLD_PERS_UID --new-personal NEW_PERS_UID
-
-# Step 3: Apply the migration
-eds-calendar-sync migrate \
-    --old-work OLD_WORK_UID --new-work NEW_WORK_UID \
-    --old-personal OLD_PERS_UID --new-personal NEW_PERS_UID
-
-# Step 4: Update your config file with the new UIDs
-nano ~/.config/eds-calendar-sync.conf
-
-# Step 5: Run a normal sync
-eds-calendar-sync sync --dry-run
-eds-calendar-sync sync --yes
+# Scans state DB for all UIDs, flags any that no longer resolve in EDS,
+# then lets you pick a replacement for each missing one interactively.
+eds-calendar-sync migrate --dry-run   # preview
+eds-calendar-sync migrate             # apply
 ```
 
-You can omit either side if only that calendar's UID changed.
+**Single-UID mode — you know the old UID, pick the new one interactively:**
+```bash
+eds-calendar-sync migrate OLD_UID --dry-run
+eds-calendar-sync migrate OLD_UID
+```
+
+**Direct mode — you know both UIDs:**
+```bash
+eds-calendar-sync migrate OLD_UID NEW_UID --dry-run
+eds-calendar-sync migrate OLD_UID NEW_UID
+```
+
+Each migration replaces the old UID in both the work and personal calendar ID
+columns, so a single command handles whichever role the calendar played.
+
+After migrating, update your config file and verify:
+```bash
+nano ~/.config/eds-calendar-sync.conf
+eds-calendar-sync sync --dry-run
+```
 
 ### Verbose Debugging
 

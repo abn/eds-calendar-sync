@@ -15,14 +15,17 @@ Get up and running with EDS Calendar Sync in 5 minutes.
 # Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Install Poetry if you don't have it
-pipx install poetry
-
-# Install the project — creates a venv and installs all dependencies
-poetry install
+# Install into your user path (recommended)
+pip install --user -e .
 ```
 
-Run commands via `poetry run` or activate the venv with `poetry shell`.
+Alternatively, use Poetry (Poetry 2.x required):
+
+```bash
+pipx install poetry
+poetry install   # creates a venv with system-site-packages enabled for gi access
+poetry shell     # activate, then run eds-calendar-sync directly
+```
 
 ## Configuration
 
@@ -34,11 +37,16 @@ eds-calendar-sync calendars
 
 Output example:
 ```
- Display Name          Account                    Mode         UID
- ─────────────────────────────────────────────────────────────────────
- Work Calendar         work.user@company.com      Read-write   d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
- Personal              personal.user@gmail.com    Read-write   02e0b7e48f4e0dbfb2c91861a8e184a75617e193
+ Display Name / UID                        Account                  Mode
+ ────────────────────────────────────────────────────────────────────────────
+ Work Calendar                             work.user@company.com    Read-write
+ d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
+ Personal                                  user@gmail.com           Read-write
+ 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 ```
+
+The UID is displayed on its own line so it is always fully visible and easy to copy,
+even in narrow terminals.
 
 ### 2. Create Configuration File
 
@@ -58,23 +66,26 @@ personal_calendar_id = 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 
 ## Usage
 
-### First Run — Dry Run (Recommended)
+### First Run — Interactive Wizard (Recommended)
 
-See what will happen without making changes:
-
-```bash
-eds-calendar-sync sync --dry-run
-```
-
-### Actual Sync
-
-Once you're satisfied with the dry run:
+Run `sync` with no arguments to launch a guided setup wizard:
 
 ```bash
 eds-calendar-sync sync
 ```
 
-The tool will show configuration and prompt for confirmation before making any changes.
+The wizard asks you to pick your work calendar, personal calendar, and sync
+direction (↔ bidirectional / → work→personal / ← personal→work) from numbered
+lists. Config file values are shown as hints so you can quickly re-select them.
+
+To preview changes without making them:
+
+```bash
+eds-calendar-sync sync --dry-run
+```
+
+Once you're happy, run it for real — the wizard selections serve as confirmation
+so no extra prompt is shown.
 
 ### Automatic Syncing
 
@@ -148,8 +159,8 @@ journalctl --user -u eds-calendar-sync.service -n 100
 systemctl --user stop eds-calendar-sync.timer
 
 # Do a full refresh (removes synced events and resyncs)
-eds-calendar-sync sync --dry-run    # Check first
-eds-calendar-sync refresh --yes     # Execute
+eds-calendar-sync refresh --dry-run   # Check first
+eds-calendar-sync refresh --yes       # Execute
 ```
 
 ## What Gets Synced?
