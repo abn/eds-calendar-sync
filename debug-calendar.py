@@ -36,8 +36,8 @@ from gi.repository import EDataServer, ECal, ICalGLib, GLib
 
 def list_calendars(registry):
     sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
-    print(f"{'Display Name':<35} {'Account':<25} {'UID'}")
-    print("-" * 100)
+    print(f"{'Display Name':<35} {'Account':<25} {'Mode':<12} {'UID'}")
+    print("-" * 112)
     for source in sources:
         name = source.get_display_name() or "(unnamed)"
         uid  = source.get_uid() or ""
@@ -47,7 +47,12 @@ def list_calendars(registry):
             parent_source = registry.ref_source(parent)
             if parent_source:
                 account = parent_source.get_display_name() or ""
-        print(f"{name:<35} {account:<25} {uid}")
+        try:
+            client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
+            mode = "Read-only" if client.is_readonly() else "Read-write"
+        except Exception:
+            mode = "Unknown"
+        print(f"{name:<35} {account:<25} {mode:<12} {uid}")
 
 
 def fmt_prop(vevent, kind, getter):
