@@ -153,11 +153,22 @@ def _run_sync(cfg: SyncConfig) -> None:
     )
 
     # -- Info panel ----------------------------------------------------------
-    direction_label = {
-        "both": "[cyan]↔ Bidirectional[/]",
-        "to-personal": "[cyan]→ Work → Personal[/]",
-        "to-work": "[cyan]← Personal → Work[/]",
-    }[cfg.sync_direction]
+    if cfg.clear:
+        direction_key = "  Target:    "
+        direction_label = {
+            "both": "[cyan]both calendars[/] [dim](all managed events)[/dim]",
+            "to-personal": "[cyan]personal calendar only[/]"
+            " [dim](events created by work→personal sync)[/dim]",
+            "to-work": "[cyan]work calendar only[/]"
+            " [dim](events created by personal→work sync)[/dim]",
+        }[cfg.sync_direction]
+    else:
+        direction_key = "  Direction: "
+        direction_label = {
+            "both": "[cyan]↔ Bidirectional[/]",
+            "to-personal": "[cyan]→ Work → Personal[/]",
+            "to-work": "[cyan]← Personal → Work[/]",
+        }[cfg.sync_direction]
 
     work_display = work_name + (f" ({work_account})" if work_account else "")
     personal_display = personal_name + (f" ({personal_account})" if personal_account else "")
@@ -176,7 +187,7 @@ def _run_sync(cfg: SyncConfig) -> None:
     info.append("  Personal:  ", style="bold")
     info.append(f"{personal_display}\n")
     info.append(f"             {personal_uid}\n", style="dim")
-    info.append("  Direction: ")
+    info.append(direction_key, style="bold")
     info.append_text(Text.from_markup(direction_label))
     info.append("\n  Operation: ")
     info.append_text(op_line)
@@ -241,6 +252,24 @@ _PERS_OPT = Annotated[
 ]
 _TO_PERS = Annotated[bool, typer.Option("--to-personal", help="One-way: work → personal only")]
 _TO_WORK = Annotated[bool, typer.Option("--to-work", help="One-way: personal → work only")]
+# clear uses different flag names to avoid the directional confusion: we're describing
+# *which calendar to clean up*, not which direction events should flow.
+_CLEAR_PERS = Annotated[
+    bool,
+    typer.Option(
+        "--personal",
+        help="Remove managed events from the personal calendar only"
+        " (those created by work→personal sync)",
+    ),
+]
+_CLEAR_WORK = Annotated[
+    bool,
+    typer.Option(
+        "--work",
+        help="Remove managed events from the work calendar only"
+        " (those created by personal→work sync)",
+    ),
+]
 _DRY_RUN = Annotated[bool, typer.Option("--dry-run", "-n", help="Preview changes without applying")]
 _YES = Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")]
 _KEEP_REMINDERS = Annotated[
@@ -311,24 +340,26 @@ def refresh(
 def clear(
     work_calendar: _WORK_OPT = None,
     personal_calendar: _PERS_OPT = None,
-    to_personal: _TO_PERS = False,
-    to_work: _TO_WORK = False,
+    personal: _CLEAR_PERS = False,
+    work: _CLEAR_WORK = False,
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
-    keep_reminders: _KEEP_REMINDERS = False,
 ) -> None:
-    """Remove all synced events without re-syncing."""
+    """Remove managed events from calendars without re-syncing.
+
+    By default clears managed events from [bold]both[/bold] calendars.
+    Use [cyan]--personal[/] or [cyan]--work[/] to restrict to one calendar.
+    """
     _run_sync(
         _build_config(
             work_calendar,
             personal_calendar,
-            to_personal,
-            to_work,
+            to_personal=personal,
+            to_work=work,
             dry_run=dry_run,
             refresh=False,
             clear=True,
             yes=yes,
-            keep_reminders=keep_reminders,
         )
     )
 
