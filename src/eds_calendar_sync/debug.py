@@ -27,10 +27,9 @@ def list_calendars(registry, console: Console) -> None:
     sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
 
     table = Table(show_header=True, header_style="bold cyan")
-    table.add_column("Display Name", style="bold")
+    table.add_column("Display Name / UID", min_width=36, overflow="fold")
     table.add_column("Account")
     table.add_column("Mode")
-    table.add_column("UID", style="dim")
 
     for source in sources:
         name = source.get_display_name() or "(unnamed)"
@@ -49,7 +48,11 @@ def list_calendars(registry, console: Console) -> None:
             mode = "Unknown"
             mode_style = "red"
 
-        table.add_row(name, account, Text(mode, style=mode_style), uid)
+        name_cell = Text()
+        name_cell.append(name, style="bold")
+        name_cell.append("\n")
+        name_cell.append(uid, style="dim")
+        table.add_row(name_cell, account, Text(mode, style=mode_style))
 
     console.print(table)
 
