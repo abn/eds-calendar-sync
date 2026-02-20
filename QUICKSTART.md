@@ -12,12 +12,17 @@ Get up and running with EDS Calendar Sync in 5 minutes.
 ## Installation
 
 ```bash
-# Install system gi dependency (usually pre-installed on Fedora with GNOME)
+# Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Editable install — scripts land on PATH automatically
-pip install --user -e .
+# Install Poetry if you don't have it
+pipx install poetry
+
+# Install the project — creates a venv and installs all dependencies
+poetry install
 ```
+
+Run commands via `poetry run` or activate the venv with `poetry shell`.
 
 ## Configuration
 

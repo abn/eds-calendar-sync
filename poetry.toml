@@ -1,0 +1,6 @@
+# Project-local Poetry configuration.
+# system-site-packages allows the venv to see system-installed PyGObject (gi),
+# which is provided by the distro package (python3-gobject on Fedora) and
+# cannot be fully replaced by the PyPI wheel alone.
+[virtualenvs]
+options.system-site-packages = true

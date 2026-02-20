@@ -48,16 +48,33 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 ### Installation
 
 ```bash
-# Install system gi dependency (usually already present on Fedora with GNOME)
+# Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Editable install from the repo — scripts are placed on PATH automatically
-pip install --user -e .
+# Install Poetry if you don't have it
+pipx install poetry          # or: curl -sSL https://install.python-poetry.org | python3 -
+
+# Install the project into a managed virtual environment
+poetry install
 ```
 
-> **Note on PyGObject:** The `python3-gobject` system package satisfies the `PyGObject`
-> dependency for the system Python. If you use a virtualenv, either pass
-> `--system-site-packages` when creating it, or install PyGObject inside the venv.
+> **Note on PyGObject:** `python3-gobject` provides the `gi` module as a compiled system
+> package that cannot be replicated by the PyPI wheel alone. `poetry.toml` configures the
+> project venv with `system-site-packages = true` so the venv can see the system `gi`
+> automatically — no extra steps needed.
+
+Once installed, prefix commands with `poetry run`, or activate the venv once:
+
+```bash
+poetry shell                          # activate the venv in your current shell
+eds-calendar-sync --help              # works directly while the shell is active
+```
+
+Or run without activating:
+
+```bash
+poetry run eds-calendar-sync --help
+```
 
 ## Configuration
 
