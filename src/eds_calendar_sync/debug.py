@@ -1,37 +1,37 @@
-#!/usr/bin/env python3
 """
 Debug tool: inspect EDS calendar events.
 
 Usage:
     # List all configured calendars
-    ./debug-calendar.py --list
+    debug-calendar --list
 
     # Dump all events in a calendar
-    ./debug-calendar.py <calendar-uid>
+    debug-calendar <calendar-uid>
 
     # Filter by title substring (case-insensitive)
-    ./debug-calendar.py <calendar-uid> --title "team meeting"
+    debug-calendar <calendar-uid> --title "team meeting"
 
     # Filter by UID substring
-    ./debug-calendar.py <calendar-uid> --uid "AAMkA"
+    debug-calendar <calendar-uid> --uid "AAMkA"
 
     # Hide the raw iCal block (show summary only)
-    ./debug-calendar.py <calendar-uid> --title "foo" --no-raw
+    debug-calendar <calendar-uid> --title "foo" --no-raw
 
     # Show only events with RECURRENCE-ID (exception VEVENTs)
-    ./debug-calendar.py <calendar-uid> --exceptions-only
+    debug-calendar <calendar-uid> --exceptions-only
 
     # Show only master events (no RECURRENCE-ID)
-    ./debug-calendar.py <calendar-uid> --masters-only
+    debug-calendar <calendar-uid> --masters-only
 """
 
 import sys
 import argparse
+
 import gi
 gi.require_version('EDataServer', '1.2')
 gi.require_version('ECal', '2.0')
 gi.require_version('ICalGLib', '3.0')
-from gi.repository import EDataServer, ECal, ICalGLib, GLib
+from gi.repository import EDataServer, ECal, ICalGLib, GLib  # noqa: F401
 
 
 def list_calendars(registry):
@@ -40,7 +40,7 @@ def list_calendars(registry):
     print("-" * 112)
     for source in sources:
         name = source.get_display_name() or "(unnamed)"
-        uid  = source.get_uid() or ""
+        uid = source.get_uid() or ""
         parent = source.get_parent()
         account = ""
         if parent:
@@ -81,21 +81,21 @@ def collect_multi(vevent, kind, getter):
 
 
 def dump_event(vevent, show_raw=True):
-    uid     = vevent.get_uid() or "(no UID)"
+    uid = vevent.get_uid() or "(no UID)"
     summary = fmt_prop(vevent, ICalGLib.PropertyKind.SUMMARY_PROPERTY,
                        lambda p: p.get_summary())
-    rid     = fmt_prop(vevent, ICalGLib.PropertyKind.RECURRENCEID_PROPERTY,
-                       lambda p: p.get_value_as_string())
-    transp  = fmt_prop(vevent, ICalGLib.PropertyKind.TRANSP_PROPERTY,
-                       lambda p: p.get_value_as_string())
-    status  = fmt_prop(vevent, ICalGLib.PropertyKind.STATUS_PROPERTY,
-                       lambda p: p.get_value_as_string())
+    rid = fmt_prop(vevent, ICalGLib.PropertyKind.RECURRENCEID_PROPERTY,
+                   lambda p: p.get_value_as_string())
+    transp = fmt_prop(vevent, ICalGLib.PropertyKind.TRANSP_PROPERTY,
+                      lambda p: p.get_value_as_string())
+    status = fmt_prop(vevent, ICalGLib.PropertyKind.STATUS_PROPERTY,
+                      lambda p: p.get_value_as_string())
     dtstart = fmt_prop(vevent, ICalGLib.PropertyKind.DTSTART_PROPERTY,
                        lambda p: p.get_value_as_string())
-    dtend   = fmt_prop(vevent, ICalGLib.PropertyKind.DTEND_PROPERTY,
-                       lambda p: p.get_value_as_string())
-    rrule   = fmt_prop(vevent, ICalGLib.PropertyKind.RRULE_PROPERTY,
-                       lambda p: p.get_value_as_string())
+    dtend = fmt_prop(vevent, ICalGLib.PropertyKind.DTEND_PROPERTY,
+                     lambda p: p.get_value_as_string())
+    rrule = fmt_prop(vevent, ICalGLib.PropertyKind.RRULE_PROPERTY,
+                     lambda p: p.get_value_as_string())
     exdates = collect_multi(vevent, ICalGLib.PropertyKind.EXDATE_PROPERTY,
                             lambda p: p.get_value_as_string())
 
@@ -115,7 +115,7 @@ def dump_event(vevent, show_raw=True):
     x_prop = vevent.get_first_property(ICalGLib.PropertyKind.X_PROPERTY)
     while x_prop:
         name = x_prop.get_x_name() or ''
-        val  = x_prop.get_x() or x_prop.get_value_as_string() or ''
+        val = x_prop.get_x() or x_prop.get_value_as_string() or ''
         print(f"  {name}: {val}")
         x_prop = vevent.get_next_property(ICalGLib.PropertyKind.X_PROPERTY)
 
@@ -177,7 +177,7 @@ def main():
     print(f"Events   : {len(objects)} total")
 
     title_filter = args.title.lower() if args.title else None
-    uid_filter   = args.uid.lower()   if args.uid   else None
+    uid_filter = args.uid.lower() if args.uid else None
 
     count = 0
     for obj in objects:
@@ -215,7 +215,3 @@ def main():
 
     print(f"\n{'-'*70}")
     print(f"Matched {count} event(s)")
-
-
-if __name__ == "__main__":
-    main()

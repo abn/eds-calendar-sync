@@ -12,15 +12,11 @@ Get up and running with EDS Calendar Sync in 5 minutes.
 ## Installation
 
 ```bash
-# Install required packages (usually pre-installed on Fedora with GNOME)
+# Install system gi dependency (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Make scripts executable
-chmod +x eds-calendar-sync.py debug-calendar.py
-
-# Copy to user bin directory (optional)
-mkdir -p ~/.local/bin
-cp eds-calendar-sync.py debug-calendar.py ~/.local/bin/
+# Editable install — scripts land on PATH automatically
+pip install --user -e .
 ```
 
 ## Configuration
@@ -28,7 +24,7 @@ cp eds-calendar-sync.py debug-calendar.py ~/.local/bin/
 ### 1. Find Your Calendar UIDs
 
 ```bash
-./debug-calendar.py --list
+debug-calendar --list
 ```
 
 Output example:
@@ -62,7 +58,7 @@ personal_calendar_id = 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 See what will happen without making changes:
 
 ```bash
-eds-calendar-sync.py --dry-run
+eds-calendar-sync --dry-run
 ```
 
 Expected output:
@@ -94,7 +90,7 @@ Sync Complete!
 Once you're satisfied with the dry run:
 
 ```bash
-eds-calendar-sync.py
+eds-calendar-sync
 ```
 
 The tool will show configuration and prompt for confirmation before making any changes.
@@ -150,7 +146,7 @@ gnome-calendar
 
 ```bash
 # Run with verbose logging
-eds-calendar-sync.py --verbose --dry-run
+eds-calendar-sync --verbose --dry-run
 
 # Check logs
 journalctl --user -u eds-calendar-sync.service -n 100
@@ -163,8 +159,8 @@ journalctl --user -u eds-calendar-sync.service -n 100
 systemctl --user stop eds-calendar-sync.timer
 
 # Do a full refresh (removes synced events and resyncs)
-eds-calendar-sync.py --refresh --dry-run  # Check first
-eds-calendar-sync.py --refresh --yes       # Execute
+eds-calendar-sync --refresh --dry-run  # Check first
+eds-calendar-sync --refresh --yes       # Execute
 ```
 
 ## What Gets Synced?

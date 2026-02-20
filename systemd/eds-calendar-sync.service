@@ -9,14 +9,14 @@ Type=oneshot
 
 # IMPORTANT: Use --yes flag for non-interactive mode
 # Option 1: Use config file (recommended)
-ExecStart=%h/.local/bin/eds-calendar-sync.py --yes
+ExecStart=%h/.local/bin/eds-calendar-sync --yes
 
 # Option 2: Use explicit calendar UIDs (uncomment and modify)
-# ExecStart=%h/.local/bin/eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+# ExecStart=%h/.local/bin/eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 
 # Option 3: One-way sync modes (uncomment one if needed)
-# ExecStart=%h/.local/bin/eds-calendar-sync.py --only-to-personal --yes
-# ExecStart=%h/.local/bin/eds-calendar-sync.py --only-to-work --yes
+# ExecStart=%h/.local/bin/eds-calendar-sync --only-to-personal --yes
+# ExecStart=%h/.local/bin/eds-calendar-sync --only-to-work --yes
 
 # Logging
 StandardOutput=journal

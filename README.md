@@ -48,24 +48,23 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 ### Installation
 
 ```bash
-# Install Python dependencies (usually already available on Fedora)
+# Install system gi dependency (usually already present on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
 
-# Make scripts executable
-chmod +x eds-calendar-sync.py debug-calendar.py
-
-# Copy to user bin directory (optional)
-mkdir -p ~/.local/bin
-cp eds-calendar-sync.py ~/.local/bin/
-cp debug-calendar.py ~/.local/bin/
+# Editable install from the repo — scripts are placed on PATH automatically
+pip install --user -e .
 ```
+
+> **Note on PyGObject:** The `python3-gobject` system package satisfies the `PyGObject`
+> dependency for the system Python. If you use a virtualenv, either pass
+> `--system-site-packages` when creating it, or install PyGObject inside the venv.
 
 ## Configuration
 
 ### Step 1: Find Your Calendar UIDs
 
 ```bash
-./debug-calendar.py --list
+debug-calendar --list
 ```
 
 This will display all calendars available in EDS with their UIDs. Identify your:
@@ -98,13 +97,13 @@ The tool shows calendar names and asks for confirmation before syncing:
 
 ```bash
 # Dry run to preview (no confirmation needed)
-./eds-calendar-sync.py \
+eds-calendar-sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193 \
   --dry-run
 
 # Actual sync (will prompt for confirmation)
-./eds-calendar-sync.py \
+eds-calendar-sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 ```
@@ -132,15 +131,15 @@ Syncs both directions: work ↔ personal
 
 ```bash
 # Interactive (prompts for confirmation)
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID
 
 # Non-interactive (auto-confirm)
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
 #### One-Way Sync: Work → Personal Only
 ```bash
-./eds-calendar-sync.py \
+eds-calendar-sync \
   --work-calendar WORK_UID \
   --personal-calendar PERSONAL_UID \
   --only-to-personal --yes
@@ -150,7 +149,7 @@ Work events appear in personal calendar with titles and details (sanitized).
 
 #### One-Way Sync: Personal → Work Only
 ```bash
-./eds-calendar-sync.py \
+eds-calendar-sync \
   --work-calendar WORK_UID \
   --personal-calendar PERSONAL_UID \
   --only-to-work --yes
@@ -163,7 +162,7 @@ Personal events appear in work calendar as "Busy" (maximum privacy).
 #### Dry Run (Preview Changes)
 ```bash
 # Shows what would happen without making changes
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --dry-run
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --dry-run
 ```
 
 Dry-run mode automatically skips confirmation prompt.
@@ -171,7 +170,7 @@ Dry-run mode automatically skips confirmation prompt.
 #### Refresh (Resync Everything)
 ```bash
 # Remove all synced events and resync from scratch
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
 ```
 
 **Important**: `--refresh` respects sync direction:
@@ -184,7 +183,7 @@ Original (non-synced) events are always preserved.
 #### Clear (Remove All Synced Events)
 ```bash
 # Remove all events created by this tool (no resync)
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --clear --yes
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --clear --yes
 ```
 
 Like `--refresh` but without resyncing. Also respects sync direction.
@@ -195,12 +194,12 @@ If you created `~/.config/eds-calendar-sync.conf`:
 
 ```bash
 # Uses config file
-./eds-calendar-sync.py
+eds-calendar-sync
 
 # With options
-./eds-calendar-sync.py --dry-run
-./eds-calendar-sync.py --only-to-personal --yes
-./eds-calendar-sync.py --refresh --yes
+eds-calendar-sync --dry-run
+eds-calendar-sync --only-to-personal --yes
+eds-calendar-sync --refresh --yes
 ```
 
 ### Command-Line Options
@@ -255,7 +254,7 @@ nano ~/.config/systemd/user/eds-calendar-sync.service
 
 **Important**: Add `--yes` flag to ExecStart line for automation:
 ```ini
-ExecStart=/path/to/eds-calendar-sync.py --work-calendar UID --personal-calendar UID --yes
+ExecStart=%h/.local/bin/eds-calendar-sync --work-calendar UID --personal-calendar UID --yes
 ```
 
 ### 2. Enable and Start Timer
@@ -414,11 +413,11 @@ CREATE TABLE sync_state (
 **To reset the state** (forces full resync):
 ```bash
 # Preferred: safely removes synced events then resyncs
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
 
 # Alternative: delete the DB file entirely (all pairs lose their state)
 rm ~/.local/share/eds-calendar-sync-state.db
-./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
 ## Troubleshooting
@@ -429,7 +428,7 @@ rm ~/.local/share/eds-calendar-sync-state.db
 Error: Calendar with UID 'xxx' not found in EDS
 ```
 
-**Solution**: Run `./debug-calendar.py --list` to verify the UID and ensure the calendar is enabled.
+**Solution**: Run `debug-calendar --list` to verify the UID and ensure the calendar is enabled.
 
 ### Permission Errors
 
@@ -445,7 +444,7 @@ Error: Failed to connect to calendar
 Error: Read-only calendars can't be modified
 ```
 
-**Solution**: Verify that your calendar is not read-only. Check with `./debug-calendar.py --list`. Some calendars (like "Birthdays") are read-only.
+**Solution**: Verify that your calendar is not read-only. Check with `debug-calendar --list`. Some calendars (like "Birthdays") are read-only.
 
 ### Duplicate Categories Error
 
@@ -467,7 +466,7 @@ Error: Cannot prompt for confirmation in non-interactive mode. Use --yes to proc
 
 **Solution**: Add `--yes` flag when running from scripts or systemd:
 ```bash
-./eds-calendar-sync.py --work-calendar UID --personal-calendar UID --yes
+eds-calendar-sync --work-calendar UID --personal-calendar UID --yes
 ```
 
 ### Systemd Service Fails
@@ -510,15 +509,15 @@ history or triggering a full resync.
 
 ```bash
 # Step 1: Find the new UIDs
-./debug-calendar.py --list
+debug-calendar --list
 
 # Step 2: Preview the migration (dry run)
-./eds-calendar-sync.py --migrate-calendar-ids --dry-run \
+eds-calendar-sync --migrate-calendar-ids --dry-run \
     --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
     --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
 
 # Step 3: Apply the migration
-./eds-calendar-sync.py --migrate-calendar-ids \
+eds-calendar-sync --migrate-calendar-ids \
     --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
     --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
 
@@ -526,8 +525,8 @@ history or triggering a full resync.
 nano ~/.config/eds-calendar-sync.conf
 
 # Step 5: Run a normal sync
-./eds-calendar-sync.py --dry-run
-./eds-calendar-sync.py --yes
+eds-calendar-sync --dry-run
+eds-calendar-sync --yes
 ```
 
 You can omit either side if only that calendar's UID changed.
@@ -536,7 +535,7 @@ You can omit either side if only that calendar's UID changed.
 
 Run with `--verbose` to see detailed operations:
 ```bash
-./eds-calendar-sync.py --work-calendar UID --personal-calendar UID --verbose --dry-run
+eds-calendar-sync --work-calendar UID --personal-calendar UID --verbose --dry-run
 ```
 
 ## Architecture
