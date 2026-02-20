@@ -340,7 +340,10 @@ def clear(
 @app.command()
 def migrate(
     old: Annotated[str, typer.Argument(help="Calendar UID to replace")],
-    new: Annotated[str, typer.Argument(help="Replacement calendar UID")],
+    new: Annotated[
+        str | None,
+        typer.Argument(help="Replacement calendar UID (interactive picker if omitted)"),
+    ] = None,
     dry_run: _DRY_RUN = False,
 ) -> None:
     """Replace a calendar UID everywhere in the state DB.
@@ -348,11 +351,70 @@ def migrate(
     Useful after a GOA reconnection assigns a new EDS UID to a calendar.
     Replaces OLD with NEW in both the work and personal ID columns so all
     existing sync records are preserved.
+
+    If NEW is omitted, an interactive list of EDS calendars is shown so
+    you can pick the replacement by number.
     """
     state_db_path = state.state_db
     if not state_db_path.exists():
         console.print(f"[bold red]Error:[/] State database not found: {state_db_path}")
         raise typer.Exit(1)
+
+    if new is None:
+        import gi
+
+        gi.require_version("ECal", "2.0")
+        gi.require_version("EDataServer", "1.2")
+        from gi.repository import ECal
+        from gi.repository import EDataServer
+
+        registry = EDataServer.SourceRegistry.new_sync(None)
+        sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
+
+        picker = Table(show_header=True, header_style="bold cyan")
+        picker.add_column("#", style="bold", justify="right", width=3)
+        picker.add_column("Display Name / UID", min_width=36, overflow="fold")
+        picker.add_column("Account")
+        picker.add_column("Mode")
+
+        uid_choices: list[str] = []
+        for source in sources:
+            sname = source.get_display_name() or "(unnamed)"
+            suid = source.get_uid() or ""
+            parent = source.get_parent()
+            account = ""
+            if parent:
+                psrc = registry.ref_source(parent)
+                if psrc:
+                    account = psrc.get_display_name() or ""
+            try:
+                client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
+                mode = "Read-write" if not client.is_readonly() else "Read-only"
+                mode_style = "green" if not client.is_readonly() else "yellow"
+            except Exception:
+                mode = "Unknown"
+                mode_style = "red"
+
+            idx = len(uid_choices) + 1
+            name_cell = Text()
+            name_cell.append(sname, style="bold")
+            name_cell.append("\n")
+            name_cell.append(suid, style="dim")
+            picker.add_row(str(idx), name_cell, account, Text(mode, style=mode_style))
+            uid_choices.append(suid)
+
+        if not uid_choices:
+            console.print("[bold red]Error:[/] No EDS calendars found.")
+            raise typer.Exit(1)
+
+        console.print(picker)
+        console.print()
+        choice = typer.prompt(f"Select replacement calendar [1-{len(uid_choices)}]", type=int)
+        if choice < 1 or choice > len(uid_choices):
+            console.print("[bold red]Error:[/] Invalid selection.")
+            raise typer.Exit(1)
+        new = uid_choices[choice - 1]
+        console.print()
 
     info = Text()
     info.append("  State DB:  ", style="bold")
