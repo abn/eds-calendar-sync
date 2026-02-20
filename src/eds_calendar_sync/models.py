@@ -28,6 +28,7 @@ class SyncConfig:
     sync_direction: str = "both"  # 'both', 'to-personal', 'to-work'
     clear: bool = False
     yes: bool = False  # Auto-confirm without prompting
+    keep_reminders: bool = False  # Preserve VALARM sub-components (stripped by default)
 
 
 @dataclass

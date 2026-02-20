@@ -44,7 +44,11 @@ def _process_creates(
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(ical_str, personal_uid)
+        sanitized = EventSanitizer.sanitize(
+            ical_str,
+            personal_uid,
+            keep_reminders=config.keep_reminders,
+        )
 
         # Debug: Show sanitized output
         if config.verbose:
@@ -99,7 +103,11 @@ def _process_updates(
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(ical_str, personal_uid)
+        sanitized = EventSanitizer.sanitize(
+            ical_str,
+            personal_uid,
+            keep_reminders=config.keep_reminders,
+        )
         personal_client.modify_event(sanitized)
 
         # Fetch the event back to get the actual stored version
@@ -126,7 +134,11 @@ def _process_updates(
 
             # Create new with fresh UUID (will be rewritten by server)
             new_uid = str(uuid.uuid4())
-            sanitized = EventSanitizer.sanitize(ical_str, new_uid)
+            sanitized = EventSanitizer.sanitize(
+                ical_str,
+                new_uid,
+                keep_reminders=config.keep_reminders,
+            )
             actual_uid = personal_client.create_event(sanitized)
 
             # Update state with new UID if returned

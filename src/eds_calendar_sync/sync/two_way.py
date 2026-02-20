@@ -41,7 +41,12 @@ def _process_new_work_event(
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode="normal")
+        sanitized = EventSanitizer.sanitize(
+            work_ical,
+            personal_uid,
+            mode="normal",
+            keep_reminders=config.keep_reminders,
+        )
 
         if config.verbose:
             logger.debug(f"Sanitized iCal:\n{sanitized.as_ical_string()}")
@@ -88,7 +93,12 @@ def _process_new_personal_event(
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode="busy")
+        sanitized = EventSanitizer.sanitize(
+            personal_ical,
+            work_uid,
+            mode="busy",
+            keep_reminders=config.keep_reminders,
+        )
 
         if config.verbose:
             logger.debug(f"Sanitized iCal (busy mode):\n{sanitized.as_ical_string()}")
@@ -274,7 +284,12 @@ def _process_sync_pair(
                 stats.modified += 1
             else:
                 try:
-                    sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode="normal")
+                    sanitized = EventSanitizer.sanitize(
+                        work_ical,
+                        personal_uid,
+                        mode="normal",
+                        keep_reminders=config.keep_reminders,
+                    )
                     personal_client.modify_event(sanitized)
 
                     # Fetch the event back to get the actual stored version
@@ -321,7 +336,12 @@ def _process_sync_pair(
                 stats.modified += 1
             else:
                 try:
-                    sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode="busy")
+                    sanitized = EventSanitizer.sanitize(
+                        personal_ical,
+                        work_uid,
+                        mode="busy",
+                        keep_reminders=config.keep_reminders,
+                    )
                     work_client.modify_event(sanitized)
 
                     # Fetch the event back to get the actual stored version

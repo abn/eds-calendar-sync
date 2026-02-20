@@ -40,7 +40,12 @@ def _process_creates_to_work(
 
     try:
         # Use 'busy' mode sanitization for personal → work
-        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode="busy")
+        sanitized = EventSanitizer.sanitize(
+            ical_str,
+            work_uid,
+            mode="busy",
+            keep_reminders=config.keep_reminders,
+        )
 
         if config.verbose:
             sanitized_str = sanitized.as_ical_string()
@@ -91,7 +96,12 @@ def _process_updates_to_work(
 
     try:
         # Use 'busy' mode sanitization for personal → work
-        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode="busy")
+        sanitized = EventSanitizer.sanitize(
+            ical_str,
+            work_uid,
+            mode="busy",
+            keep_reminders=config.keep_reminders,
+        )
         work_client.modify_event(sanitized)
 
         # Fetch the event back to get the actual stored version
@@ -118,7 +128,12 @@ def _process_updates_to_work(
 
             # Create new with fresh UUID (will be rewritten by server)
             new_uid = str(uuid.uuid4())
-            sanitized = EventSanitizer.sanitize(ical_str, new_uid, mode="busy")
+            sanitized = EventSanitizer.sanitize(
+                ical_str,
+                new_uid,
+                mode="busy",
+                keep_reminders=config.keep_reminders,
+            )
             actual_uid = work_client.create_event(sanitized)
 
             # Update state with new UID if returned

@@ -107,6 +107,7 @@ def _build_config(
     refresh: bool,
     clear: bool,
     yes: bool,
+    keep_reminders: bool = False,
 ) -> SyncConfig:
     if to_personal and to_work:
         raise typer.BadParameter("--to-personal and --to-work are mutually exclusive")
@@ -139,6 +140,7 @@ def _build_config(
         sync_direction=direction,
         clear=clear,
         yes=yes,
+        keep_reminders=keep_reminders,
     )
 
 
@@ -177,6 +179,9 @@ def _run_sync(cfg: SyncConfig) -> None:
     info.append_text(Text.from_markup(direction_label))
     info.append("\n  Operation: ")
     info.append_text(op_line)
+    if cfg.keep_reminders:
+        info.append("\n  Reminders: ")
+        info.append("preserved", style="yellow")
     if cfg.dry_run:
         info.append("\n  Mode:      ")
         info.append("DRY RUN", style="bold magenta")
@@ -237,6 +242,16 @@ _TO_PERS = Annotated[bool, typer.Option("--to-personal", help="One-way: work →
 _TO_WORK = Annotated[bool, typer.Option("--to-work", help="One-way: personal → work only")]
 _DRY_RUN = Annotated[bool, typer.Option("--dry-run", "-n", help="Preview changes without applying")]
 _YES = Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")]
+_KEEP_REMINDERS = Annotated[
+    bool,
+    typer.Option(
+        "--keep-reminders",
+        help=(
+            "Preserve VALARM reminders on synced events "
+            "(stripped by default to avoid duplicate notifications)"
+        ),
+    ),
+]
 
 
 @app.command()
@@ -247,6 +262,7 @@ def sync(
     to_work: _TO_WORK = False,
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
+    keep_reminders: _KEEP_REMINDERS = False,
 ) -> None:
     """Synchronise calendars (bidirectional by default)."""
     _run_sync(
@@ -259,6 +275,7 @@ def sync(
             refresh=False,
             clear=False,
             yes=yes,
+            keep_reminders=keep_reminders,
         )
     )
 
@@ -271,6 +288,7 @@ def refresh(
     to_work: _TO_WORK = False,
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
+    keep_reminders: _KEEP_REMINDERS = False,
 ) -> None:
     """Remove synced events then re-sync from scratch."""
     _run_sync(
@@ -283,6 +301,7 @@ def refresh(
             refresh=True,
             clear=False,
             yes=yes,
+            keep_reminders=keep_reminders,
         )
     )
 
@@ -295,6 +314,7 @@ def clear(
     to_work: _TO_WORK = False,
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
+    keep_reminders: _KEEP_REMINDERS = False,
 ) -> None:
     """Remove all synced events without re-syncing."""
     _run_sync(
@@ -307,6 +327,7 @@ def clear(
             refresh=False,
             clear=True,
             yes=yes,
+            keep_reminders=keep_reminders,
         )
     )
 

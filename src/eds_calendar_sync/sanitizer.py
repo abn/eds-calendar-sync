@@ -45,7 +45,13 @@ class EventSanitizer:
             subcomp = component.get_first_component(comp_kind)
 
     @classmethod
-    def sanitize(cls, ical_string: str, new_uid: str, mode: str = "normal") -> ICalGLib.Component:
+    def sanitize(
+        cls,
+        ical_string: str,
+        new_uid: str,
+        mode: str = "normal",
+        keep_reminders: bool = False,
+    ) -> ICalGLib.Component:
         """
         Parse an iCal string, replace UID, and strip sensitive data.
 
@@ -54,6 +60,9 @@ class EventSanitizer:
             new_uid: New UUID to assign to the event
             mode: 'normal' = source→target (strip details, keep title)
                   'busy' = target→source (strip everything, title becomes "Busy")
+            keep_reminders: When True, preserve VALARM sub-components.
+                  Defaults to False — reminders are stripped to prevent
+                  duplicate notifications on the target calendar.
 
         Returns:
             Sanitized ICalGLib.Component ready for target calendar
@@ -100,8 +109,10 @@ class EventSanitizer:
             for prop_kind in strip_props:
                 cls._remove_all_properties(event, prop_kind)
 
-            # Remove alarms to prevent duplicate notifications
-            cls._remove_all_components(event, ICalGLib.ComponentKind.VALARM_COMPONENT)
+            # Remove alarms to prevent duplicate notifications.
+            # Preserved only when the caller has explicitly opted in.
+            if not keep_reminders:
+                cls._remove_all_components(event, ICalGLib.ComponentKind.VALARM_COMPONENT)
 
             # For 'busy' mode, replace title with "Busy"
             if mode == "busy":
