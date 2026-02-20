@@ -294,7 +294,17 @@ def sync(
     yes: _YES = False,
     keep_reminders: _KEEP_REMINDERS = False,
 ) -> None:
-    """Synchronise calendars (bidirectional by default)."""
+    """Synchronise calendars (bidirectional by default).
+
+    With no arguments, launches an interactive wizard to select the
+    calendar pair and sync direction.
+    """
+    if work_calendar is None and personal_calendar is None and not to_personal and not to_work:
+        work_calendar, personal_calendar, direction = _interactive_sync_setup()
+        to_personal = direction == "to-personal"
+        to_work = direction == "to-work"
+        yes = True  # wizard selections serve as confirmation
+
     _run_sync(
         _build_config(
             work_calendar,
@@ -365,7 +375,7 @@ def clear(
 
 
 # ---------------------------------------------------------------------------
-# migrate helpers
+# EDS / interactive helpers  (used by sync wizard and migrate)
 # ---------------------------------------------------------------------------
 
 
@@ -420,20 +430,81 @@ def _print_picker_table(entries) -> None:
     console.print(picker)
 
 
-def _pick_calendar(entries, allow_skip: bool = False) -> str | None:
+def _pick_calendar(
+    entries, allow_skip: bool = False, prompt: str = "Select replacement"
+) -> str | None:
     """
     Prompt the user to choose a calendar from entries by number.
     Returns the chosen UID, or None if the user enters 0 and allow_skip is True.
     """
     n = len(entries)
     suffix = " (0 to skip)" if allow_skip else ""
-    choice = typer.prompt(f"Select replacement [1-{n}]{suffix}", type=int)
+    choice = typer.prompt(f"{prompt} [1-{n}]{suffix}", type=int)
     if allow_skip and choice == 0:
         return None
     if choice < 1 or choice > n:
         console.print("[bold red]Error:[/] Invalid selection.")
         raise typer.Exit(1)
     return entries[choice - 1][4]
+
+
+def _interactive_sync_setup() -> tuple[str, str, str]:
+    """
+    Three-step wizard: pick work calendar, personal calendar, sync direction.
+    Returns (work_id, personal_id, direction) where direction is one of
+    'both', 'to-personal', 'to-work'.
+    """
+    config_file = _load_config_file(state.config_path)
+    config_work = config_file.get("work_calendar_id")
+    config_personal = config_file.get("personal_calendar_id")
+
+    _, eds_entries = _load_eds_calendars()
+    if not eds_entries:
+        console.print("[bold red]Error:[/] No EDS calendars found.")
+        raise typer.Exit(1)
+
+    uid_to_idx = {suid: i + 1 for i, (_, _, _, _, suid) in enumerate(eds_entries)}
+
+    # -- Step 1: work calendar ------------------------------------------------
+    console.rule("[bold]Step 1 of 3 — Work calendar[/bold]")
+    if config_work:
+        hint = uid_to_idx.get(config_work)
+        hint_str = f"#{hint}  {config_work}" if hint else f"{config_work} [red](not in EDS)[/red]"
+        console.print(f"  [dim]Config: {hint_str}[/dim]\n")
+    _print_picker_table(eds_entries)
+    console.print()
+    work_id = _pick_calendar(eds_entries, prompt="Select work calendar")
+
+    # -- Step 2: personal calendar --------------------------------------------
+    console.rule("[bold]Step 2 of 3 — Personal calendar[/bold]")
+    if config_personal:
+        hint = uid_to_idx.get(config_personal)
+        hint_str = (
+            f"#{hint}  {config_personal}" if hint else f"{config_personal} [red](not in EDS)[/red]"
+        )
+        console.print(f"  [dim]Config: {hint_str}[/dim]\n")
+    _print_picker_table(eds_entries)
+    console.print()
+    personal_id = _pick_calendar(eds_entries, prompt="Select personal calendar")
+
+    # -- Step 3: direction ----------------------------------------------------
+    console.rule("[bold]Step 3 of 3 — Sync direction[/bold]")
+    dir_table = Table(show_header=False, box=None, padding=(0, 2))
+    dir_table.add_column("#", style="bold", justify="right", width=3)
+    dir_table.add_column()
+    dir_table.add_row("1", "[cyan]↔[/]  Bidirectional [dim](default)[/dim]")
+    dir_table.add_row("2", "[cyan]→[/]  Work → Personal only")
+    dir_table.add_row("3", "[cyan]←[/]  Personal → Work only")
+    console.print(dir_table)
+    console.print()
+    dir_choice = typer.prompt("Select direction [1-3]", type=int, default=1)
+    direction = {1: "both", 2: "to-personal", 3: "to-work"}.get(dir_choice)
+    if direction is None:
+        console.print("[bold red]Error:[/] Invalid selection.")
+        raise typer.Exit(1)
+
+    console.print()
+    return work_id, personal_id, direction
 
 
 _NEXT_STEPS = (
