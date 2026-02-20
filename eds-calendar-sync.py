@@ -387,8 +387,7 @@ class EventSanitizer:
             subcomp = component.get_first_component(comp_kind)
 
     @classmethod
-    def sanitize(cls, ical_string: str, new_uid: str, mode: str = 'normal',
-                 extra_exdates: set = None) -> ICalGLib.Component:
+    def sanitize(cls, ical_string: str, new_uid: str, mode: str = 'normal') -> ICalGLib.Component:
         """
         Parse an iCal string, replace UID, and strip sensitive data.
 
@@ -397,9 +396,6 @@ class EventSanitizer:
             new_uid: New UUID to assign to the event
             mode: 'normal' = source→target (strip details, keep title)
                   'busy' = target→source (strip everything, title becomes "Busy")
-            extra_exdates: Optional set of YYYYMMDD date strings to inject as
-                  EXDATE;VALUE=DATE entries.  Used to suppress declined recurring
-                  exception occurrences from the personal calendar master event.
 
         Returns:
             Sanitized ICalGLib.Component ready for target calendar
@@ -467,18 +463,6 @@ class EventSanitizer:
             # Appointment") and Google Calendar ("Private" visibility).
             cls._remove_all_properties(event, ICalGLib.PropertyKind.CLASS_PROPERTY)
             event.add_property(ICalGLib.Property.new_from_string("CLASS:PRIVATE"))
-
-            # Inject EXDATE entries for declined exception occurrences.
-            # Exchange records a declined series instance as a transparent
-            # exception VEVENT (RECURRENCE-ID + TRANSP:TRANSPARENT) rather
-            # than adding EXDATE to the master.  We collect those dates in the
-            # caller and inject them here so the personal calendar master does
-            # not expand an occurrence on the declined date.
-            if extra_exdates:
-                for date_str in sorted(extra_exdates):
-                    event.add_property(
-                        ICalGLib.Property.new_from_string(f"EXDATE;VALUE=DATE:{date_str}")
-                    )
 
         # Check if comp is a VCALENDAR or a VEVENT directly
         if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
@@ -900,7 +884,6 @@ class CalendarSynchronizer:
         obj_hash: str,
         personal_client: EDSCalendarClient,
         state_db: StateDatabase,
-        extra_exdates: set = None,
     ):
         """Handle creation of new events in personal calendar."""
         personal_uid = str(uuid.uuid4())
@@ -913,7 +896,7 @@ class CalendarSynchronizer:
             return
 
         try:
-            sanitized = EventSanitizer.sanitize(ical_str, personal_uid, extra_exdates=extra_exdates)
+            sanitized = EventSanitizer.sanitize(ical_str, personal_uid)
 
             # Debug: Show sanitized output
             if self.config.verbose:
@@ -958,7 +941,6 @@ class CalendarSynchronizer:
         personal_uid: str,
         personal_client: EDSCalendarClient,
         state_db: StateDatabase,
-        extra_exdates: set = None,
     ):
         """Handle updates to existing events in personal calendar."""
         if self.config.dry_run:
@@ -969,7 +951,7 @@ class CalendarSynchronizer:
             return
 
         try:
-            sanitized = EventSanitizer.sanitize(ical_str, personal_uid, extra_exdates=extra_exdates)
+            sanitized = EventSanitizer.sanitize(ical_str, personal_uid)
             personal_client.modify_event(sanitized)
 
             # Fetch the event back to get the actual stored version
@@ -996,7 +978,7 @@ class CalendarSynchronizer:
 
                 # Create new with fresh UUID (will be rewritten by server)
                 new_uid = str(uuid.uuid4())
-                sanitized = EventSanitizer.sanitize(ical_str, new_uid, extra_exdates=extra_exdates)
+                sanitized = EventSanitizer.sanitize(ical_str, new_uid)
                 actual_uid = personal_client.create_event(sanitized)
 
                 # Update state with new UID if returned
@@ -1709,23 +1691,38 @@ class CalendarSynchronizer:
                 work_events = work_client.get_all_events()
                 work_uids_seen = set()
 
-                # Pre-scan: collect the RECURRENCE-ID dates of transparent
-                # (declined) exception VEVENTs for each series UID.  These
-                # dates will be injected as EXDATE into the corresponding
-                # master event so that the personal calendar does not expand
-                # an occurrence on a date the user has declined.
-                declined_dates_by_uid: Dict[str, Set[str]] = {}
+                # Pre-scan: collect each master VEVENT's EXDATE set.
+                # Exchange represents a declined recurring instance by:
+                #   (a) adding the declined date to the master VEVENT's EXDATE
+                #   (b) creating an exception VEVENT (same UID, RECURRENCE-ID)
+                # Exchange does NOT set TRANSP:TRANSPARENT on these exceptions.
+                # We read the master EXDATEs here so the main loop can detect
+                # and skip exception VEVENTs that represent declined instances.
+                master_exdates_by_uid: Dict[str, Set[str]] = {}
                 for _obj in work_events:
                     _comp = self._parse_component(_obj)
-                    _rid = _comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY)
-                    if _rid and self._is_free_time(_comp):
-                        _base_uid = _comp.get_uid()
+                    # Only master VEVENTs (no RECURRENCE-ID)
+                    if _comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
+                        continue
+                    _uid = _comp.get_uid()
+                    if not _uid:
+                        continue
+                    _exdates: Set[str] = set()
+                    _ed = _comp.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                    while _ed:
                         try:
-                            _t = _rid.get_recurrenceid()
-                            _date = f"{_t.get_year():04d}{_t.get_month():02d}{_t.get_day():02d}"
-                            declined_dates_by_uid.setdefault(_base_uid, set()).add(_date)
+                            _t = _ed.get_exdate()
+                            if _t and not _t.is_null_time():
+                                _exdates.add(
+                                    f"{_t.get_year():04d}"
+                                    f"{_t.get_month():02d}"
+                                    f"{_t.get_day():02d}"
+                                )
                         except Exception:
                             pass
+                        _ed = _comp.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                    if _exdates:
+                        master_exdates_by_uid[_uid] = _exdates
 
                 # Process each work event
                 self.logger.info(f"Processing {len(work_events)} work events...")
@@ -1770,41 +1767,59 @@ class CalendarSynchronizer:
                     else:
                         work_uid = base_uid
 
+                    # Skip exception VEVENTs that represent declined or removed
+                    # instances.  Exchange records a declined series instance by:
+                    # (a) adding the declined date to the master's EXDATE, and
+                    # (b) creating an exception VEVENT (same UID + RECURRENCE-ID).
+                    # Exchange does NOT set TRANSP:TRANSPARENT on these.
+                    # We detect them by checking that the exception's RECURRENCE-ID
+                    # date is in the master's EXDATE AND the exception's DTSTART
+                    # falls on the same date (ruling out genuinely rescheduled
+                    # occurrences, which have a different DTSTART date).
+                    if rid_prop:
+                        try:
+                            _rid_t = rid_prop.get_recurrenceid()
+                            _rid_date = (
+                                f"{_rid_t.get_year():04d}"
+                                f"{_rid_t.get_month():02d}"
+                                f"{_rid_t.get_day():02d}"
+                            )
+                            if _rid_date in master_exdates_by_uid.get(base_uid, set()):
+                                _dts_prop = comp.get_first_property(
+                                    ICalGLib.PropertyKind.DTSTART_PROPERTY
+                                )
+                                if _dts_prop:
+                                    _dts = _dts_prop.get_dtstart()
+                                    _dts_date = (
+                                        f"{_dts.get_year():04d}"
+                                        f"{_dts.get_month():02d}"
+                                        f"{_dts.get_day():02d}"
+                                    )
+                                    if _dts_date == _rid_date:
+                                        self.logger.debug(
+                                            f"Skipping declined/removed exception "
+                                            f"{base_uid} on {_rid_date}"
+                                        )
+                                        continue
+                        except Exception:
+                            pass
+
                     work_uids_seen.add(work_uid)
 
-                    # For master events (no RECURRENCE-ID), look up any dates
-                    # where the user has declined an instance.  These are
-                    # injected as EXDATE so the personal calendar does not show
-                    # an occurrence on those dates.
-                    # Exception VEVENTs (with RECURRENCE-ID) are skipped entirely
-                    # by the _is_free_time check above, so extra_exdates only
-                    # applies to master events.
-                    extra_exdates = declined_dates_by_uid.get(base_uid) if not rid_prop else None
-
                     ical_str = comp.as_ical_string()
-                    # Augment the hash for master events to include the set of
-                    # declined dates.  This ensures that when the user declines
-                    # a new instance the master's stored hash no longer matches
-                    # and we re-sync with updated EXDATEs.
-                    if extra_exdates:
-                        declined_key = ','.join(sorted(extra_exdates))
-                        obj_hash = self._compute_hash(ical_str + f"\nDECLINED:{declined_key}")
-                    else:
-                        obj_hash = self._compute_hash(ical_str)
+                    obj_hash = self._compute_hash(ical_str)
 
                     if work_uid not in state:
                         # CREATE
                         self._process_creates(
-                            work_uid, ical_str, obj_hash, personal_client, state_db,
-                            extra_exdates=extra_exdates,
+                            work_uid, ical_str, obj_hash, personal_client, state_db
                         )
                     elif obj_hash != state[work_uid]['hash']:
                         # UPDATE
                         self._process_updates(
                             work_uid, ical_str, obj_hash,
                             state[work_uid]['target_uid'],
-                            personal_client, state_db,
-                            extra_exdates=extra_exdates,
+                            personal_client, state_db
                         )
 
                 # Process deletions

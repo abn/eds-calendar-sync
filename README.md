@@ -335,16 +335,9 @@ Events synced from work to personal calendar:
 The following events are silently skipped (not synced, no error counted):
 
 - **Cancelled events** (`STATUS:CANCELLED`): No longer block time; Exchange rejects creating them as new items.
-- **Transparent / free-time events** (`TRANSP:TRANSPARENT`): The event does not mark the user as busy, so it should not appear as a busy block in the personal calendar. Exchange automatically sets `TRANSP:TRANSPARENT` when you decline a meeting; it can also be set manually on optional or informational events.
+- **Transparent / free-time events** (`TRANSP:TRANSPARENT`): The event does not mark the user as busy, so it should not appear as a busy block in the personal calendar.
+- **Declined recurring instances**: When you decline a specific occurrence of a recurring series, Exchange represents this by (a) adding the declined date to the master VEVENT's `EXDATE` list and (b) creating an exception VEVENT with the same UID, `RECURRENCE-ID`, and `SUMMARY` prefixed with `"Declined:"`. Exchange does **not** set `TRANSP:TRANSPARENT` on these exception VEVENTs. The tool detects them by checking that the exception's `RECURRENCE-ID` date appears in the master's `EXDATE` list *and* the exception's `DTSTART` falls on the same date (which distinguishes declined instances from genuinely rescheduled ones, which have a different `DTSTART`). The master VEVENT is synced normally — its `EXDATE` already suppresses the declined occurrence in the personal calendar.
 - **Empty recurring series**: Recurring events where every occurrence is excluded by `EXDATE` (the series expands to zero valid instances). Exchange cannot create a series with no occurrences.
-
-> **Declined recurring instances and the master series**
->
-> When you decline a specific instance of a recurring series, Exchange represents that as a transparent exception VEVENT (same UID, `RECURRENCE-ID`, `TRANSP:TRANSPARENT`). The exception VEVENT is skipped (see above), but without further action the master series in the personal calendar would still generate an occurrence on the declined date.
->
-> To prevent this, the tool performs a **pre-scan** of all work events before syncing. Any transparent exception VEVENT with a `RECURRENCE-ID` contributes its date to a per-series set of "declined dates". When the corresponding master event is then synced, those dates are injected as `EXDATE;VALUE=DATE:YYYYMMDD` entries into the sanitized copy, so the personal calendar never shows a busy block on the declined date.
->
-> Because the augmented set of declined dates is included in the change-detection hash, newly declined instances automatically trigger a re-sync of the personal master to add the additional EXDATEs.
 
 ### Personal → Work Sanitization
 Events synced from personal to work calendar (maximum privacy):
