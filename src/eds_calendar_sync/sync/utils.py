@@ -3,10 +3,10 @@ Stateless event-inspection helpers.
 """
 
 import hashlib
-import datetime
 
 import gi
-gi.require_version('ICalGLib', '3.0')
+
+gi.require_version("ICalGLib", "3.0")
 from gi.repository import ICalGLib
 
 
@@ -21,10 +21,10 @@ def compute_hash(ical_string: str) -> str:
 
     # Properties that servers often add/modify and should be ignored for change detection
     volatile_props = [
-        ICalGLib.PropertyKind.DTSTAMP_PROPERTY,      # Timestamp when event was created/modified
+        ICalGLib.PropertyKind.DTSTAMP_PROPERTY,  # Timestamp when event was created/modified
         ICalGLib.PropertyKind.LASTMODIFIED_PROPERTY,  # Last modification time
-        ICalGLib.PropertyKind.CREATED_PROPERTY,       # Creation time
-        ICalGLib.PropertyKind.SEQUENCE_PROPERTY,      # Sequence number for updates
+        ICalGLib.PropertyKind.CREATED_PROPERTY,  # Creation time
+        ICalGLib.PropertyKind.SEQUENCE_PROPERTY,  # Sequence number for updates
     ]
 
     def normalize_vevent(event):
@@ -45,7 +45,7 @@ def compute_hash(ical_string: str) -> str:
         normalize_vevent(comp)
 
     normalized_ical = comp.as_ical_string()
-    return hashlib.sha256(normalized_ical.encode('utf-8')).hexdigest()
+    return hashlib.sha256(normalized_ical.encode("utf-8")).hexdigest()
 
 
 def parse_component(obj) -> ICalGLib.Component:
@@ -81,9 +81,7 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         try:
             t = prop.get_exdate()
             if t and not t.is_null_time():
-                exdates.add(
-                    f"{t.get_year():04d}{t.get_month():02d}{t.get_day():02d}"
-                )
+                exdates.add(f"{t.get_year():04d}{t.get_month():02d}{t.get_day():02d}")
         except Exception:
             pass
         prop = check.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
@@ -101,9 +99,7 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
             occ = it.next()
             if occ is None or occ.is_null_time():
                 break
-            occ_key = (
-                f"{occ.get_year():04d}{occ.get_month():02d}{occ.get_day():02d}"
-            )
+            occ_key = f"{occ.get_year():04d}{occ.get_month():02d}{occ.get_day():02d}"
             if occ_key not in exdates:
                 return True  # Found at least one valid occurrence
     except Exception:
@@ -131,8 +127,8 @@ def is_event_cancelled(comp: ICalGLib.Component) -> bool:
     try:
         return status_prop.get_status() == ICalGLib.PropertyStatus.CANCELLED
     except (AttributeError, TypeError):
-        val = status_prop.get_value_as_string() or ''
-        return val.strip().upper() == 'CANCELLED'
+        val = status_prop.get_value_as_string() or ""
+        return val.strip().upper() == "CANCELLED"
 
 
 def is_free_time(comp: ICalGLib.Component) -> bool:
@@ -157,5 +153,5 @@ def is_free_time(comp: ICalGLib.Component) -> bool:
     try:
         return transp_prop.get_transp() == ICalGLib.PropertyTransp.TRANSPARENT
     except (AttributeError, TypeError):
-        val = transp_prop.get_value_as_string() or ''
-        return val.strip().upper() == 'TRANSPARENT'
+        val = transp_prop.get_value_as_string() or ""
+        return val.strip().upper() == "TRANSPARENT"

@@ -5,16 +5,18 @@ CalendarSynchronizer — thin orchestrator that delegates to sync submodules.
 import logging
 
 import gi
-gi.require_version('EDataServer', '1.2')
+
+gi.require_version("EDataServer", "1.2")
 from gi.repository import EDataServer
 
-from ..models import SyncConfig, SyncStats
-from ..db import StateDatabase
-from ..eds_client import EDSCalendarClient
-from .refresh import perform_clear
-from .two_way import run_two_way
-from .to_personal import run_one_way_to_personal
-from .to_work import run_one_way_to_work
+from eds_calendar_sync.db import StateDatabase
+from eds_calendar_sync.eds_client import EDSCalendarClient
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.models import SyncStats
+from eds_calendar_sync.sync.refresh import perform_clear
+from eds_calendar_sync.sync.to_personal import run_one_way_to_personal
+from eds_calendar_sync.sync.to_work import run_one_way_to_work
+from eds_calendar_sync.sync.two_way import run_two_way
 
 
 class CalendarSynchronizer:
@@ -43,16 +45,15 @@ class CalendarSynchronizer:
         ) as state_db:
             state_db.migrate_if_needed(self.config.refresh or self.config.clear)
 
-            args = (self.config, self.stats, self.logger,
-                    work_client, personal_client, state_db)
+            args = (self.config, self.stats, self.logger, work_client, personal_client, state_db)
 
             if self.config.clear:
                 perform_clear(*args)
-            elif self.config.sync_direction == 'both':
+            elif self.config.sync_direction == "both":
                 run_two_way(*args)
-            elif self.config.sync_direction == 'to-personal':
+            elif self.config.sync_direction == "to-personal":
                 run_one_way_to_personal(*args)
-            elif self.config.sync_direction == 'to-work':
+            elif self.config.sync_direction == "to-work":
                 run_one_way_to_work(*args)
 
         return self.stats

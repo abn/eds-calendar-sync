@@ -2,13 +2,13 @@
 SQLite state persistence for calendar sync tracking.
 """
 
+import logging
 import sqlite3
 import time
-import logging
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 
-from .models import CalendarSyncError
+from eds_calendar_sync.models import CalendarSyncError
 
 
 class StateDatabase:
@@ -36,7 +36,7 @@ class StateDatabase:
 
     def _init_schema(self):
         """Create the sync_state table if it doesn't exist (new schema)."""
-        self.conn.execute('''
+        self.conn.execute("""
             CREATE TABLE IF NOT EXISTS sync_state (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 work_calendar_id TEXT NOT NULL,
@@ -50,7 +50,7 @@ class StateDatabase:
                 last_sync_at INTEGER NOT NULL,
                 UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
             )
-        ''')
+        """)
         self.conn.commit()
 
     def migrate_if_needed(self, is_refresh_or_clear: bool):
@@ -75,8 +75,8 @@ class StateDatabase:
 
         # Detect old schema by checking for the work_calendar_id column
         cursor = self.conn.execute("PRAGMA table_info(sync_state)")
-        columns = {row['name'] for row in cursor.fetchall()}
-        if 'work_calendar_id' in columns:
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "work_calendar_id" in columns:
             return  # Already on new schema, nothing to do
 
         logger.info("Migrating state database to new schema (adding calendar pair columns)...")
@@ -85,13 +85,11 @@ class StateDatabase:
         inverted_count = self.conn.execute(
             "SELECT COUNT(*) FROM sync_state WHERE origin = 'target'"
         ).fetchone()[0]
-        total_count = self.conn.execute(
-            "SELECT COUNT(*) FROM sync_state"
-        ).fetchone()[0]
+        total_count = self.conn.execute("SELECT COUNT(*) FROM sync_state").fetchone()[0]
 
         # Rebuild the table with the new schema, carrying over existing rows
         # with empty calendar pair placeholders (filled in below).
-        self.conn.executescript('''
+        self.conn.executescript("""
             CREATE TABLE sync_state_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 work_calendar_id TEXT NOT NULL,
@@ -116,7 +114,7 @@ class StateDatabase:
                 FROM sync_state;
             DROP TABLE sync_state;
             ALTER TABLE sync_state_new RENAME TO sync_state;
-        ''')
+        """)
 
         # Handle inverted (origin='target') records from old --only-to-work runs
         if inverted_count > 0:
@@ -136,7 +134,7 @@ class StateDatabase:
                     self.conn.execute(
                         "UPDATE sync_state SET work_calendar_id = ?, personal_calendar_id = ? "
                         "WHERE origin = 'source'",
-                        (self.work_calendar_id, self.personal_calendar_id)
+                        (self.work_calendar_id, self.personal_calendar_id),
                     )
                 self.conn.commit()
                 raise CalendarSyncError(
@@ -152,7 +150,7 @@ class StateDatabase:
         if total_count > 0:
             self.conn.execute(
                 "UPDATE sync_state SET work_calendar_id = ?, personal_calendar_id = ?",
-                (self.work_calendar_id, self.personal_calendar_id)
+                (self.work_calendar_id, self.personal_calendar_id),
             )
             kept = total_count - inverted_count
             logger.info(
@@ -168,7 +166,7 @@ class StateDatabase:
     # Query methods — all scoped to the current (work, personal) pair     #
     # ------------------------------------------------------------------ #
 
-    def get_all_state(self) -> Dict[str, Dict[str, str]]:
+    def get_all_state(self) -> dict[str, dict[str, str]]:
         """Retrieve work→personal sync records for this calendar pair.
 
         Returns records with origin='source' only (work-originated events).
@@ -177,14 +175,11 @@ class StateDatabase:
         cursor = self.conn.execute(
             "SELECT source_uid, target_uid, source_hash FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND origin = 'source'",
-            (self.work_calendar_id, self.personal_calendar_id)
+            (self.work_calendar_id, self.personal_calendar_id),
         )
-        return {
-            row[0]: {'target_uid': row[1], 'hash': row[2]}
-            for row in cursor.fetchall()
-        }
+        return {row[0]: {"target_uid": row[1], "hash": row[2]} for row in cursor.fetchall()}
 
-    def get_all_state_by_target(self) -> Dict[str, Dict[str, str]]:
+    def get_all_state_by_target(self) -> dict[str, dict[str, str]]:
         """Retrieve personal→work sync records for this calendar pair.
 
         Returns records with origin='target' only (personal-originated events).
@@ -193,12 +188,9 @@ class StateDatabase:
         cursor = self.conn.execute(
             "SELECT source_uid, target_uid, target_hash FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND origin = 'target'",
-            (self.work_calendar_id, self.personal_calendar_id)
+            (self.work_calendar_id, self.personal_calendar_id),
         )
-        return {
-            row[1]: {'source_uid': row[0], 'hash': row[2]}
-            for row in cursor.fetchall()
-        }
+        return {row[1]: {"source_uid": row[0], "hash": row[2]} for row in cursor.fetchall()}
 
     def get_all_state_bidirectional(self) -> list:
         """Retrieve all sync state records for this calendar pair."""
@@ -206,7 +198,7 @@ class StateDatabase:
             "SELECT id, source_uid, target_uid, source_hash, target_hash, "
             "origin, created_at, last_sync_at FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ?",
-            (self.work_calendar_id, self.personal_calendar_id)
+            (self.work_calendar_id, self.personal_calendar_id),
         )
         return cursor.fetchall()
 
@@ -216,7 +208,7 @@ class StateDatabase:
             "SELECT * FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
             "AND source_uid = ? LIMIT 1",
-            (self.work_calendar_id, self.personal_calendar_id, source_uid)
+            (self.work_calendar_id, self.personal_calendar_id, source_uid),
         )
         return cursor.fetchone()
 
@@ -226,7 +218,7 @@ class StateDatabase:
             "SELECT * FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
             "AND target_uid = ? LIMIT 1",
-            (self.work_calendar_id, self.personal_calendar_id, target_uid)
+            (self.work_calendar_id, self.personal_calendar_id, target_uid),
         )
         return cursor.fetchone()
 
@@ -239,13 +231,21 @@ class StateDatabase:
             " source_uid, target_uid, source_hash, target_hash, "
             " origin, created_at, last_sync_at) "
             "VALUES (?, ?, ?, ?, ?, ?, 'source', ?, ?)",
-            (self.work_calendar_id, self.personal_calendar_id,
-             source_uid, target_uid, content_hash, content_hash,
-             timestamp, timestamp)
+            (
+                self.work_calendar_id,
+                self.personal_calendar_id,
+                source_uid,
+                target_uid,
+                content_hash,
+                content_hash,
+                timestamp,
+                timestamp,
+            ),
         )
 
-    def insert_bidirectional(self, source_uid: str, target_uid: str,
-                             source_hash: str, target_hash: str, origin: str):
+    def insert_bidirectional(
+        self, source_uid: str, target_uid: str, source_hash: str, target_hash: str, origin: str
+    ):
         """Insert new bidirectional sync record for this calendar pair."""
         timestamp = int(time.time())
         self.conn.execute(
@@ -254,9 +254,17 @@ class StateDatabase:
             " source_uid, target_uid, source_hash, target_hash, "
             " origin, created_at, last_sync_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (self.work_calendar_id, self.personal_calendar_id,
-             source_uid, target_uid, source_hash, target_hash,
-             origin, timestamp, timestamp)
+            (
+                self.work_calendar_id,
+                self.personal_calendar_id,
+                source_uid,
+                target_uid,
+                source_hash,
+                target_hash,
+                origin,
+                timestamp,
+                timestamp,
+            ),
         )
 
     def update_hash(self, source_uid: str, content_hash: str):
@@ -264,8 +272,14 @@ class StateDatabase:
         self.conn.execute(
             "UPDATE sync_state SET source_hash = ?, target_hash = ?, last_sync_at = ? "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND source_uid = ?",
-            (content_hash, content_hash, int(time.time()),
-             self.work_calendar_id, self.personal_calendar_id, source_uid)
+            (
+                content_hash,
+                content_hash,
+                int(time.time()),
+                self.work_calendar_id,
+                self.personal_calendar_id,
+                source_uid,
+            ),
         )
 
     def update_hashes(self, source_uid: str, target_uid: str, source_hash: str, target_hash: str):
@@ -275,9 +289,15 @@ class StateDatabase:
             "SET source_hash = ?, target_hash = ?, last_sync_at = ? "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
             "AND source_uid = ? AND target_uid = ?",
-            (source_hash, target_hash, int(time.time()),
-             self.work_calendar_id, self.personal_calendar_id,
-             source_uid, target_uid)
+            (
+                source_hash,
+                target_hash,
+                int(time.time()),
+                self.work_calendar_id,
+                self.personal_calendar_id,
+                source_uid,
+                target_uid,
+            ),
         )
 
     def delete(self, source_uid: str):
@@ -285,7 +305,7 @@ class StateDatabase:
         self.conn.execute(
             "DELETE FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND source_uid = ?",
-            (self.work_calendar_id, self.personal_calendar_id, source_uid)
+            (self.work_calendar_id, self.personal_calendar_id, source_uid),
         )
 
     def delete_by_pair(self, source_uid: str, target_uid: str):
@@ -294,15 +314,14 @@ class StateDatabase:
             "DELETE FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
             "AND source_uid = ? AND target_uid = ?",
-            (self.work_calendar_id, self.personal_calendar_id, source_uid, target_uid)
+            (self.work_calendar_id, self.personal_calendar_id, source_uid, target_uid),
         )
 
     def clear_all(self):
         """Remove all state records for this calendar pair (for refresh/clear)."""
         self.conn.execute(
-            "DELETE FROM sync_state "
-            "WHERE work_calendar_id = ? AND personal_calendar_id = ?",
-            (self.work_calendar_id, self.personal_calendar_id)
+            "DELETE FROM sync_state WHERE work_calendar_id = ? AND personal_calendar_id = ?",
+            (self.work_calendar_id, self.personal_calendar_id),
         )
 
     def commit(self):
@@ -330,8 +349,8 @@ def query_status_all_pairs(db_path: Path) -> list:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        columns = {row['name'] for row in conn.execute("PRAGMA table_info(sync_state)")}
-        if 'work_calendar_id' not in columns:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(sync_state)")}
+        if "work_calendar_id" not in columns:
             return []
         cursor = conn.execute("""
             SELECT
@@ -380,14 +399,12 @@ def migrate_calendar_ids_in_db(
                 )
         if old_personal_id and new_personal_id:
             cur = conn.execute(
-                "SELECT COUNT(*) FROM sync_state WHERE personal_calendar_id = ?",
-                (old_personal_id,)
+                "SELECT COUNT(*) FROM sync_state WHERE personal_calendar_id = ?", (old_personal_id,)
             )
             personal_rows = cur.fetchone()[0]
             if not dry_run:
                 conn.execute(
-                    "UPDATE sync_state SET personal_calendar_id = ? "
-                    "WHERE personal_calendar_id = ?",
+                    "UPDATE sync_state SET personal_calendar_id = ? WHERE personal_calendar_id = ?",
                     (new_personal_id, old_personal_id),
                 )
         if not dry_run:

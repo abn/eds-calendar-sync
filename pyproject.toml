@@ -14,6 +14,12 @@ dependencies = [
     "typer[all]",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "ruff",
+]
+
 [project.scripts]
 eds-calendar-sync = "eds_calendar_sync.cli:main"
 
@@ -25,4 +31,28 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "TID", # flake8-tidy-imports (no relative imports)
+]
+ignore = [
+    "B008", # do not perform function calls in default arguments (typer pattern)
+    "E402", # module level import not at top of file (gi.require_version() pattern)
+]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+force-single-line = true
+known-first-party = ["eds_calendar_sync"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

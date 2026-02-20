@@ -3,19 +3,23 @@ Bidirectional sync.
 """
 
 import uuid
-from typing import Dict
 
 import gi
-gi.require_version('ICalGLib', '3.0')
-gi.require_version('GLib', '2.0')
-from gi.repository import ICalGLib, GLib
 
-from ..models import CalendarSyncError, SyncConfig, SyncStats
-from ..eds_client import EDSCalendarClient
-from ..db import StateDatabase
-from ..sanitizer import EventSanitizer
-from .refresh import perform_refresh_two_way
-from .utils import compute_hash, parse_component
+gi.require_version("ICalGLib", "3.0")
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib
+from gi.repository import ICalGLib
+
+from eds_calendar_sync.db import StateDatabase
+from eds_calendar_sync.eds_client import EDSCalendarClient
+from eds_calendar_sync.models import CalendarSyncError
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.models import SyncStats
+from eds_calendar_sync.sanitizer import EventSanitizer
+from eds_calendar_sync.sync.refresh import perform_refresh_two_way
+from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import parse_component
 
 
 def _process_new_work_event(
@@ -32,14 +36,12 @@ def _process_new_work_event(
     work_ical = work_comp.as_ical_string()
 
     if config.dry_run:
-        logger.info(
-            f"[DRY RUN] [WORK→PERSONAL] Would CREATE: {work_uid} -> {personal_uid}"
-        )
+        logger.info(f"[DRY RUN] [WORK→PERSONAL] Would CREATE: {work_uid} -> {personal_uid}")
         stats.added += 1
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode='normal')
+        sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode="normal")
 
         if config.verbose:
             logger.debug(f"Sanitized iCal:\n{sanitized.as_ical_string()}")
@@ -59,7 +61,7 @@ def _process_new_work_event(
             # Fallback if fetch fails
             personal_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, 'source')
+        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "source")
         stats.added += 1
         logger.debug(f"Created personal event {personal_uid} from work {work_uid}")
     except (GLib.Error, CalendarSyncError) as e:
@@ -81,14 +83,12 @@ def _process_new_personal_event(
     personal_ical = personal_comp.as_ical_string()
 
     if config.dry_run:
-        logger.info(
-            f"[DRY RUN] [PERSONAL→WORK] Would CREATE: {personal_uid} -> {work_uid}"
-        )
+        logger.info(f"[DRY RUN] [PERSONAL→WORK] Would CREATE: {personal_uid} -> {work_uid}")
         stats.added += 1
         return
 
     try:
-        sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode='busy')
+        sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode="busy")
 
         if config.verbose:
             logger.debug(f"Sanitized iCal (busy mode):\n{sanitized.as_ical_string()}")
@@ -108,7 +108,7 @@ def _process_new_personal_event(
             # Fallback if fetch fails
             work_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, 'target')
+        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "target")
         stats.added += 1
         logger.debug(f"Created work event {work_uid} from personal {personal_uid}")
     except (GLib.Error, CalendarSyncError) as e:
@@ -121,18 +121,18 @@ def _process_sync_pair(
     stats: SyncStats,
     logger,
     state_record,
-    work_events: Dict[str, ICalGLib.Component],
-    personal_events: Dict[str, ICalGLib.Component],
+    work_events: dict[str, ICalGLib.Component],
+    personal_events: dict[str, ICalGLib.Component],
     work_client: EDSCalendarClient,
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
 ):
     """Process an existing sync pair (check for changes/deletions)."""
-    work_uid = state_record['source_uid']        # DB uses 'source' for work
-    personal_uid = state_record['target_uid']    # DB uses 'target' for personal
-    origin = state_record['origin']
-    stored_work_hash = state_record['source_hash']
-    stored_personal_hash = state_record['target_hash']
+    work_uid = state_record["source_uid"]  # DB uses 'source' for work
+    personal_uid = state_record["target_uid"]  # DB uses 'target' for personal
+    origin = state_record["origin"]
+    stored_work_hash = state_record["source_hash"]
+    stored_personal_hash = state_record["target_hash"]
 
     work_exists = work_uid in work_events
     personal_exists = personal_uid in personal_events
@@ -147,7 +147,7 @@ def _process_sync_pair(
 
     if not work_exists:
         # Work event deleted
-        if origin == 'source':
+        if origin == "source":
             # Work was authoritative → delete the personal mirror
             if config.dry_run:
                 logger.info(
@@ -171,21 +171,25 @@ def _process_sync_pair(
             # so we must handle recreation here rather than deferring to Phase 2.)
             if config.dry_run:
                 logger.info(
-                    f"[DRY RUN] [PERSONAL→WORK] Would RECREATE: "
-                    f"{work_uid} (work manually deleted)"
+                    f"[DRY RUN] [PERSONAL→WORK] Would RECREATE: {work_uid} (work manually deleted)"
                 )
                 stats.added += 1
             else:
                 state_db.delete_by_pair(work_uid, personal_uid)
                 _process_new_personal_event(
-                    config, stats, logger,
-                    personal_uid, personal_events[personal_uid], work_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    personal_uid,
+                    personal_events[personal_uid],
+                    work_client,
+                    state_db,
                 )
         return
 
     if not personal_exists:
         # Personal event deleted
-        if origin == 'target':
+        if origin == "target":
             # Personal was authoritative → delete the work mirror
             if config.dry_run:
                 logger.info(
@@ -217,8 +221,13 @@ def _process_sync_pair(
             else:
                 state_db.delete_by_pair(work_uid, personal_uid)
                 _process_new_work_event(
-                    config, stats, logger,
-                    work_uid, work_events[work_uid], personal_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    work_uid,
+                    work_events[work_uid],
+                    personal_client,
+                    state_db,
                 )
         return
 
@@ -243,7 +252,7 @@ def _process_sync_pair(
             logger.debug(f"  Stored: {stored_personal_hash}")
             logger.debug(f"  Current: {current_personal_hash}")
 
-    if origin == 'source':  # DB uses 'source' for work origin
+    if origin == "source":  # DB uses 'source' for work origin
         # Work is authoritative - sync work→personal if EITHER changed
         # This ensures manual edits to personal are overwritten
         work_changed = current_work_hash != stored_work_hash
@@ -265,7 +274,7 @@ def _process_sync_pair(
                 stats.modified += 1
             else:
                 try:
-                    sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode='normal')
+                    sanitized = EventSanitizer.sanitize(work_ical, personal_uid, mode="normal")
                     personal_client.modify_event(sanitized)
 
                     # Fetch the event back to get the actual stored version
@@ -290,7 +299,7 @@ def _process_sync_pair(
                     logger.error(f"Failed to update personal {personal_uid}: {e}")
                     stats.errors += 1
 
-    elif origin == 'target':  # DB uses 'target' for personal origin
+    elif origin == "target":  # DB uses 'target' for personal origin
         # Personal is authoritative - sync personal→work if EITHER changed
         # This ensures manual edits to work are overwritten
         personal_changed = current_personal_hash != stored_personal_hash
@@ -312,7 +321,7 @@ def _process_sync_pair(
                 stats.modified += 1
             else:
                 try:
-                    sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode='busy')
+                    sanitized = EventSanitizer.sanitize(personal_ical, work_uid, mode="busy")
                     work_client.modify_event(sanitized)
 
                     # Fetch the event back to get the actual stored version
@@ -358,14 +367,14 @@ def run_two_way(
         # Fetch all events from both calendars
         logger.info("Fetching work events...")
         work_events_list = work_client.get_all_events()
-        work_events: Dict[str, ICalGLib.Component] = {}
+        work_events: dict[str, ICalGLib.Component] = {}
         for obj in work_events_list:
             comp = parse_component(obj)
             work_events[comp.get_uid()] = comp
 
         logger.info("Fetching personal events...")
         personal_events_list = personal_client.get_all_events()
-        personal_events: Dict[str, ICalGLib.Component] = {}
+        personal_events: dict[str, ICalGLib.Component] = {}
         for obj in personal_events_list:
             comp = parse_component(obj)
             personal_events[comp.get_uid()] = comp
@@ -382,13 +391,19 @@ def run_two_way(
 
         # Phase 1: Process existing sync pairs
         for state_record in state_records:
-            work_uid = state_record['source_uid']    # 'source' maps to 'work' in DB
-            personal_uid = state_record['target_uid']  # 'target' maps to 'personal' in DB
+            work_uid = state_record["source_uid"]  # 'source' maps to 'work' in DB
+            personal_uid = state_record["target_uid"]  # 'target' maps to 'personal' in DB
 
             _process_sync_pair(
-                config, stats, logger,
-                state_record, work_events, personal_events,
-                work_client, personal_client, state_db
+                config,
+                stats,
+                logger,
+                state_record,
+                work_events,
+                personal_events,
+                work_client,
+                personal_client,
+                state_db,
             )
 
             work_uids_processed.add(work_uid)
@@ -404,8 +419,7 @@ def run_two_way(
                     logger.debug(f"Skipping managed work event: {work_uid}")
                     continue
                 _process_new_work_event(
-                    config, stats, logger,
-                    work_uid, work_comp, personal_client, state_db
+                    config, stats, logger, work_uid, work_comp, personal_client, state_db
                 )
 
         # Phase 3: Process new personal events (not yet synced)
@@ -418,8 +432,7 @@ def run_two_way(
                     logger.debug(f"Skipping managed personal event: {personal_uid}")
                     continue
                 _process_new_personal_event(
-                    config, stats, logger,
-                    personal_uid, personal_comp, work_client, state_db
+                    config, stats, logger, personal_uid, personal_comp, work_client, state_db
                 )
 
         # Commit changes

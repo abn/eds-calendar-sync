@@ -2,18 +2,22 @@
 Evolution Data Server calendar connectivity wrapper.
 """
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import gi
-gi.require_version('EDataServer', '1.2')
-gi.require_version('ECal', '2.0')
-gi.require_version('ICalGLib', '3.0')
-from gi.repository import EDataServer, ECal, ICalGLib, GLib
 
-from .models import CalendarSyncError
+gi.require_version("EDataServer", "1.2")
+gi.require_version("ECal", "2.0")
+gi.require_version("ICalGLib", "3.0")
+from gi.repository import ECal
+from gi.repository import EDataServer
+from gi.repository import GLib
+from gi.repository import ICalGLib
+
+from eds_calendar_sync.models import CalendarSyncError
 
 
-def get_calendar_display_info(calendar_uid: str) -> Tuple[str, str, str]:
+def get_calendar_display_info(calendar_uid: str) -> tuple[str, str, str]:
     """
     Get human-readable information about a calendar.
 
@@ -57,21 +61,16 @@ class EDSCalendarClient:
         """Connect to the specified calendar in EDS."""
         source = self.registry.ref_source(self.calendar_uid)
         if not source:
-            raise CalendarSyncError(
-                f"Calendar with UID '{self.calendar_uid}' not found in EDS"
-            )
+            raise CalendarSyncError(f"Calendar with UID '{self.calendar_uid}' not found in EDS")
 
         try:
             self.client = ECal.Client.connect_sync(
-                source,
-                ECal.ClientSourceType.EVENTS,
-                timeout,
-                None
+                source, ECal.ClientSourceType.EVENTS, timeout, None
             )
         except GLib.Error as e:
             raise CalendarSyncError(
                 f"Failed to connect to calendar {self.calendar_uid}: {e.message}"
-            )
+            ) from e
 
     def get_all_events(self) -> list:
         """Retrieve all events from the calendar."""
@@ -85,18 +84,14 @@ class EDSCalendarClient:
             _, objects = self.client.get_object_list_sync("#t", None)
             return objects
         except GLib.Error as e:
-            raise CalendarSyncError(f"Failed to fetch events: {e.message}")
+            raise CalendarSyncError(f"Failed to fetch events: {e.message}") from e
 
     def create_event(self, component: ICalGLib.Component) -> Optional[str]:
         """Create a new event in the calendar."""
         if not self.client:
             raise CalendarSyncError("Client not connected")
 
-        success, out_uid = self.client.create_object_sync(
-            component,
-            ECal.OperationFlags.NONE,
-            None
-        )
+        success, out_uid = self.client.create_object_sync(component, ECal.OperationFlags.NONE, None)
         if not success:
             raise CalendarSyncError("Failed to create event")
         return out_uid
@@ -107,10 +102,7 @@ class EDSCalendarClient:
             raise CalendarSyncError("Client not connected")
 
         success = self.client.modify_object_sync(
-            component,
-            ECal.ObjModType.THIS,
-            ECal.OperationFlags.NONE,
-            None
+            component, ECal.ObjModType.THIS, ECal.OperationFlags.NONE, None
         )
         if not success:
             raise CalendarSyncError("Failed to modify event")
@@ -125,7 +117,7 @@ class EDSCalendarClient:
             None,  # rid (recurrence-id)
             ECal.ObjModType.THIS,
             ECal.OperationFlags.NONE,
-            None  # cancellable
+            None,  # cancellable
         )
         if not success:
             raise CalendarSyncError(f"Failed to remove event {uid}")

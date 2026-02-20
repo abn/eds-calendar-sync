@@ -2,13 +2,13 @@
 Command-line interface for EDS Calendar Sync.
 """
 
-import sys
 import logging
-from dataclasses import dataclass, field
-from pathlib import Path
 from configparser import ConfigParser
-from typing import Dict, Optional
-from typing_extensions import Annotated
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
+from typing import Annotated
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -17,10 +17,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .models import DEFAULT_STATE_DB, DEFAULT_CONFIG, SyncConfig, CalendarSyncError
-from .db import migrate_calendar_ids_in_db, query_status_all_pairs
-from .eds_client import get_calendar_display_info
-from .sync import CalendarSynchronizer
+from eds_calendar_sync.db import migrate_calendar_ids_in_db
+from eds_calendar_sync.db import query_status_all_pairs
+from eds_calendar_sync.eds_client import get_calendar_display_info
+from eds_calendar_sync.models import DEFAULT_CONFIG
+from eds_calendar_sync.models import DEFAULT_STATE_DB
+from eds_calendar_sync.models import CalendarSyncError
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.sync import CalendarSynchronizer
 
 # ---------------------------------------------------------------------------
 # Typer app
@@ -38,6 +42,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Global state shared across subcommands
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class _State:
@@ -74,6 +79,7 @@ def _global(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -83,7 +89,7 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _load_config_file(config_path: Path) -> Dict[str, str]:
+def _load_config_file(config_path: Path) -> dict[str, str]:
     if not config_path.exists():
         return {}
     parser = ConfigParser()
@@ -187,14 +193,14 @@ def _run_sync(cfg: SyncConfig) -> None:
         stats = CalendarSynchronizer(cfg).run()
     except CalendarSyncError as e:
         console.print(f"[bold red]Sync failed:[/] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     except KeyboardInterrupt:
         console.print("[yellow]Interrupted by user[/]")
-        raise typer.Exit(130)
+        raise typer.Exit(130) from None
     except Exception as e:
         console.print_exception()
         console.print(f"[bold red]Unexpected error:[/] {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     # -- Results table -------------------------------------------------------
     results = Table.grid(padding=(0, 2))
@@ -244,8 +250,18 @@ def sync(
     yes: _YES = False,
 ) -> None:
     """Synchronise calendars (bidirectional by default)."""
-    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
-                            dry_run=dry_run, refresh=False, clear=False, yes=yes))
+    _run_sync(
+        _build_config(
+            work_calendar,
+            personal_calendar,
+            to_personal,
+            to_work,
+            dry_run=dry_run,
+            refresh=False,
+            clear=False,
+            yes=yes,
+        )
+    )
 
 
 @app.command()
@@ -258,8 +274,18 @@ def refresh(
     yes: _YES = False,
 ) -> None:
     """Remove synced events then re-sync from scratch."""
-    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
-                            dry_run=dry_run, refresh=True, clear=False, yes=yes))
+    _run_sync(
+        _build_config(
+            work_calendar,
+            personal_calendar,
+            to_personal,
+            to_work,
+            dry_run=dry_run,
+            refresh=True,
+            clear=False,
+            yes=yes,
+        )
+    )
 
 
 @app.command()
@@ -272,28 +298,31 @@ def clear(
     yes: _YES = False,
 ) -> None:
     """Remove all synced events without re-syncing."""
-    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
-                            dry_run=dry_run, refresh=False, clear=True, yes=yes))
+    _run_sync(
+        _build_config(
+            work_calendar,
+            personal_calendar,
+            to_personal,
+            to_work,
+            dry_run=dry_run,
+            refresh=False,
+            clear=True,
+            yes=yes,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
 # Subcommand: migrate
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def migrate(
-    old_work: Annotated[
-        Optional[str], typer.Option(help="Old work calendar UID")
-    ] = None,
-    new_work: Annotated[
-        Optional[str], typer.Option(help="New work calendar UID")
-    ] = None,
-    old_personal: Annotated[
-        Optional[str], typer.Option(help="Old personal calendar UID")
-    ] = None,
-    new_personal: Annotated[
-        Optional[str], typer.Option(help="New personal calendar UID")
-    ] = None,
+    old_work: Annotated[Optional[str], typer.Option(help="Old work calendar UID")] = None,
+    new_work: Annotated[Optional[str], typer.Option(help="New work calendar UID")] = None,
+    old_personal: Annotated[Optional[str], typer.Option(help="Old personal calendar UID")] = None,
+    new_personal: Annotated[Optional[str], typer.Option(help="New personal calendar UID")] = None,
     dry_run: _DRY_RUN = False,
 ) -> None:
     """Update calendar IDs in state DB after GOA reconnection."""
@@ -339,8 +368,10 @@ def migrate(
 
     work_rows, pers_rows = migrate_calendar_ids_in_db(
         state_db_path,
-        old_work, new_work,
-        old_personal, new_personal,
+        old_work,
+        new_work,
+        old_personal,
+        new_personal,
         dry_run,
     )
 
@@ -370,10 +401,10 @@ def migrate(
 # Subcommand: status
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def status() -> None:
     """Show sync configuration and state database summary."""
-    import sqlite3
     from datetime import datetime
 
     # -- Configuration section -----------------------------------------------
@@ -383,12 +414,12 @@ def status() -> None:
     cfg_info = Text()
     cfg_info.append("  Config:   ", style="bold")
     cfg_info.append(str(state.config_path) + " ")
-    cfg_info.append("✓" if config_exists else "(not found)",
-                    style="green" if config_exists else "red")
+    cfg_info.append(
+        "✓" if config_exists else "(not found)", style="green" if config_exists else "red"
+    )
     cfg_info.append("\n  State DB: ", style="bold")
     cfg_info.append(str(state.state_db) + " ")
-    cfg_info.append("✓" if db_exists else "(not found)",
-                    style="green" if db_exists else "yellow")
+    cfg_info.append("✓" if db_exists else "(not found)", style="green" if db_exists else "yellow")
 
     # Try to resolve the configured calendar pair's display names via EDS.
     config_file = _load_config_file(state.config_path)
@@ -425,13 +456,16 @@ def status() -> None:
 
     if not rows:
         if not db_exists:
-            console.print("[yellow]No state database yet — run[/] [cyan]eds-calendar-sync sync[/] [yellow]to create it.[/]")
+            console.print(
+                "[yellow]No state database yet — run[/] "
+                "[cyan]eds-calendar-sync sync[/] "
+                "[yellow]to create it.[/]"
+            )
         else:
             console.print("[yellow]State database is empty — no syncs recorded yet.[/]")
         return
 
     # Group rows by (work_calendar_id, personal_calendar_id) pair
-    from itertools import groupby
     pairs = {}
     for row in rows:
         key = (row["work_calendar_id"], row["personal_calendar_id"])
@@ -454,7 +488,7 @@ def status() -> None:
         except Exception:
             p_label = _short(p_id)
 
-        is_configured_pair = (w_id == work_id and p_id == personal_id)
+        is_configured_pair = w_id == work_id and p_id == personal_id
         pair_title = f"[bold]{w_label}[/bold] ↔ [bold]{p_label}[/bold]"
         if is_configured_pair:
             pair_title += "  [green](configured)[/green]"
@@ -469,9 +503,7 @@ def status() -> None:
             direction = "Work → Personal" if row["origin"] == "source" else "Personal → Work"
             ts = row["last_sync_at"] or 0
             overall_last_sync = max(overall_last_sync, ts)
-            last_sync_str = (
-                datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "—"
-            )
+            last_sync_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "—"
             table.add_row(direction, str(row["count"]), last_sync_str)
 
         console.print(Panel(table, title=pair_title, expand=False))
@@ -481,14 +513,16 @@ def status() -> None:
 # Subcommand: calendars
 # ---------------------------------------------------------------------------
 
+
 @app.command()
 def calendars() -> None:
     """List all configured EDS calendars."""
     import gi
-    gi.require_version('EDataServer', '1.2')
+
+    gi.require_version("EDataServer", "1.2")
     from gi.repository import EDataServer
 
-    from .debug import list_calendars as _list_calendars
+    from eds_calendar_sync.debug import list_calendars as _list_calendars
 
     registry = EDataServer.SourceRegistry.new_sync(None)
     _list_calendars(registry, console)
@@ -497,6 +531,7 @@ def calendars() -> None:
 # ---------------------------------------------------------------------------
 # Subcommand: inspect
 # ---------------------------------------------------------------------------
+
 
 @app.command()
 def inspect(
@@ -509,7 +544,8 @@ def inspect(
     ] = None,
     no_raw: Annotated[bool, typer.Option("--no-raw", help="Omit the raw iCal block")] = False,
     exceptions_only: Annotated[
-        bool, typer.Option("--exceptions-only", help="Show only exception VEVENTs (have RECURRENCE-ID)")
+        bool,
+        typer.Option("--exceptions-only", help="Show only exception VEVENTs (have RECURRENCE-ID)"),
     ] = False,
     masters_only: Annotated[
         bool, typer.Option("--masters-only", help="Show only master VEVENTs (no RECURRENCE-ID)")
@@ -517,12 +553,15 @@ def inspect(
 ) -> None:
     """Inspect / debug events in a calendar."""
     import gi
-    gi.require_version('EDataServer', '1.2')
-    gi.require_version('ECal', '2.0')
-    gi.require_version('ICalGLib', '3.0')
-    from gi.repository import EDataServer, ECal, ICalGLib
 
-    from .debug import dump_event
+    gi.require_version("EDataServer", "1.2")
+    gi.require_version("ECal", "2.0")
+    gi.require_version("ICalGLib", "3.0")
+    from gi.repository import ECal
+    from gi.repository import EDataServer
+    from gi.repository import ICalGLib
+
+    from eds_calendar_sync.debug import dump_event
 
     registry = EDataServer.SourceRegistry.new_sync(None)
     source = registry.ref_source(calendar_uid)
@@ -530,10 +569,7 @@ def inspect(
         console.print(f"[bold red]Error:[/] Calendar [cyan]{calendar_uid}[/] not found.")
         raise typer.Exit(1)
 
-    console.print(
-        f"[bold]Calendar:[/] {source.get_display_name()} "
-        f"[dim]({calendar_uid})[/dim]"
-    )
+    console.print(f"[bold]Calendar:[/] {source.get_display_name()} [dim]({calendar_uid})[/dim]")
 
     client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 30, None)
     _, objects = client.get_object_list_sync("#t", None)
@@ -554,17 +590,15 @@ def inspect(
 
         if title_filter:
             sp = vevent.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY)
-            summary = (sp.get_summary() or '') if sp else ''
+            summary = (sp.get_summary() or "") if sp else ""
             if title_filter not in summary.lower():
                 continue
 
         if uid_filter:
-            if uid_filter not in (vevent.get_uid() or '').lower():
+            if uid_filter not in (vevent.get_uid() or "").lower():
                 continue
 
-        has_rid = vevent.get_first_property(
-            ICalGLib.PropertyKind.RECURRENCEID_PROPERTY
-        ) is not None
+        has_rid = vevent.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY) is not None
 
         if exceptions_only and not has_rid:
             continue
@@ -580,6 +614,7 @@ def inspect(
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     app()

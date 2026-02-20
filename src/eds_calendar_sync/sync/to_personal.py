@@ -3,19 +3,26 @@ Work→Personal one-way sync.
 """
 
 import uuid
-from typing import Dict, Set
 
 import gi
-gi.require_version('ICalGLib', '3.0')
-gi.require_version('GLib', '2.0')
-from gi.repository import ICalGLib, GLib
 
-from ..models import CalendarSyncError, SyncConfig, SyncStats
-from ..eds_client import EDSCalendarClient
-from ..db import StateDatabase
-from ..sanitizer import EventSanitizer
-from .refresh import perform_refresh
-from .utils import compute_hash, parse_component, has_valid_occurrences, is_event_cancelled, is_free_time
+gi.require_version("ICalGLib", "3.0")
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib
+from gi.repository import ICalGLib
+
+from eds_calendar_sync.db import StateDatabase
+from eds_calendar_sync.eds_client import EDSCalendarClient
+from eds_calendar_sync.models import CalendarSyncError
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.models import SyncStats
+from eds_calendar_sync.sanitizer import EventSanitizer
+from eds_calendar_sync.sync.refresh import perform_refresh
+from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import has_valid_occurrences
+from eds_calendar_sync.sync.utils import is_event_cancelled
+from eds_calendar_sync.sync.utils import is_free_time
+from eds_calendar_sync.sync.utils import parse_component
 
 
 def _process_creates(
@@ -62,14 +69,13 @@ def _process_creates(
             # Fallback if fetch fails
             personal_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, 'source')
+        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "source")
         stats.added += 1
         logger.debug(f"Created event {work_uid} as {personal_uid}")
     except (GLib.Error, CalendarSyncError) as e:
-        if 'sanitized' in dir():
+        if "sanitized" in dir():
             logger.warning(
-                f"Sanitized iCal for failed event {work_uid}:\n"
-                f"{sanitized.as_ical_string()}"
+                f"Sanitized iCal for failed event {work_uid}:\n{sanitized.as_ical_string()}"
             )
         logger.error(f"Failed to create event {work_uid}: {e}")
         stats.errors += 1
@@ -137,7 +143,7 @@ def _process_updates(
 
             # Update state DB with new personal UID
             state_db.delete(work_uid)
-            state_db.insert_bidirectional(work_uid, new_uid, work_hash, personal_hash, 'source')
+            state_db.insert_bidirectional(work_uid, new_uid, work_hash, personal_hash, "source")
             stats.modified += 1
             logger.debug(f"Recreated event {work_uid} as {new_uid}")
         except (GLib.Error, CalendarSyncError) as e2:
@@ -149,29 +155,25 @@ def _process_deletions(
     config: SyncConfig,
     stats: SyncStats,
     logger,
-    state: Dict[str, Dict[str, str]],
-    work_uids_seen: Set[str],
+    state: dict[str, dict[str, str]],
+    work_uids_seen: set[str],
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
 ):
     """Handle deletion of events removed from work calendar."""
     for work_uid in list(state.keys()):
         if work_uid not in work_uids_seen:
-            personal_uid = state[work_uid]['target_uid']
+            personal_uid = state[work_uid]["target_uid"]
 
             if config.dry_run:
-                logger.info(
-                    f"[DRY RUN] Would DELETE event: {work_uid} (personal: {personal_uid})"
-                )
+                logger.info(f"[DRY RUN] Would DELETE event: {work_uid} (personal: {personal_uid})")
                 stats.deleted += 1
                 continue
 
             logger.debug(f"Attempting to delete personal event with UID: {personal_uid}")
             try:
                 personal_client.remove_event(personal_uid)
-                logger.debug(
-                    f"Successfully deleted event {work_uid} (personal: {personal_uid})"
-                )
+                logger.debug(f"Successfully deleted event {work_uid} (personal: {personal_uid})")
             except (GLib.Error, CalendarSyncError) as e:
                 logger.error(f"Failed to delete {personal_uid}: {e}")
                 stats.errors += 1
@@ -202,7 +204,7 @@ def run_one_way_to_personal(
         # Fetch work events
         logger.info("Fetching work events...")
         work_events = work_client.get_all_events()
-        work_uids_seen: Set[str] = set()
+        work_uids_seen: set[str] = set()
 
         # Pre-scan: collect each master VEVENT's EXDATE set.
         # Exchange represents a declined recurring instance by:
@@ -211,7 +213,7 @@ def run_one_way_to_personal(
         # Exchange does NOT set TRANSP:TRANSPARENT on these exceptions.
         # We read the master EXDATEs here so the main loop can detect
         # and skip exception VEVENTs that represent declined instances.
-        master_exdates_by_uid: Dict[str, Set[str]] = {}
+        master_exdates_by_uid: dict[str, set[str]] = {}
         for _obj in work_events:
             _comp = parse_component(_obj)
             # Only master VEVENTs (no RECURRENCE-ID)
@@ -220,17 +222,13 @@ def run_one_way_to_personal(
             _uid = _comp.get_uid()
             if not _uid:
                 continue
-            _exdates: Set[str] = set()
+            _exdates: set[str] = set()
             _ed = _comp.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
             while _ed:
                 try:
                     _t = _ed.get_exdate()
                     if _t and not _t.is_null_time():
-                        _exdates.add(
-                            f"{_t.get_year():04d}"
-                            f"{_t.get_month():02d}"
-                            f"{_t.get_day():02d}"
-                        )
+                        _exdates.add(f"{_t.get_year():04d}{_t.get_month():02d}{_t.get_day():02d}")
                 except Exception:
                     pass
                 _ed = _comp.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
@@ -301,25 +299,18 @@ def run_one_way_to_personal(
                 try:
                     _rid_t = rid_prop.get_recurrenceid()
                     _rid_date = (
-                        f"{_rid_t.get_year():04d}"
-                        f"{_rid_t.get_month():02d}"
-                        f"{_rid_t.get_day():02d}"
+                        f"{_rid_t.get_year():04d}{_rid_t.get_month():02d}{_rid_t.get_day():02d}"
                     )
                     if _rid_date in master_exdates_by_uid.get(base_uid, set()):
-                        _dts_prop = comp.get_first_property(
-                            ICalGLib.PropertyKind.DTSTART_PROPERTY
-                        )
+                        _dts_prop = comp.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
                         if _dts_prop:
                             _dts = _dts_prop.get_dtstart()
                             _dts_date = (
-                                f"{_dts.get_year():04d}"
-                                f"{_dts.get_month():02d}"
-                                f"{_dts.get_day():02d}"
+                                f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"
                             )
                             if _dts_date == _rid_date:
                                 logger.debug(
-                                    f"Skipping declined/removed exception "
-                                    f"{base_uid} on {_rid_date}"
+                                    f"Skipping declined/removed exception {base_uid} on {_rid_date}"
                                 )
                                 continue
                 except Exception:
@@ -333,16 +324,20 @@ def run_one_way_to_personal(
             if work_uid not in state:
                 # CREATE
                 _process_creates(
-                    config, stats, logger,
-                    work_uid, ical_str, obj_hash, personal_client, state_db
+                    config, stats, logger, work_uid, ical_str, obj_hash, personal_client, state_db
                 )
-            elif obj_hash != state[work_uid]['hash']:
+            elif obj_hash != state[work_uid]["hash"]:
                 # UPDATE
                 _process_updates(
-                    config, stats, logger,
-                    work_uid, ical_str, obj_hash,
-                    state[work_uid]['target_uid'],
-                    personal_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    work_uid,
+                    ical_str,
+                    obj_hash,
+                    state[work_uid]["target_uid"],
+                    personal_client,
+                    state_db,
                 )
 
         # Process deletions

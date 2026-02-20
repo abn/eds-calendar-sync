@@ -7,15 +7,18 @@ Importable functions:
 """
 
 import gi
-gi.require_version('EDataServer', '1.2')
-gi.require_version('ECal', '2.0')
-gi.require_version('ICalGLib', '3.0')
-from gi.repository import EDataServer, ECal, ICalGLib, GLib  # noqa: F401
 
+gi.require_version("EDataServer", "1.2")
+gi.require_version("ECal", "2.0")
+gi.require_version("ICalGLib", "3.0")
+from gi.repository import ECal  # noqa: F401
+from gi.repository import EDataServer  # noqa: F401
+from gi.repository import GLib  # noqa: F401
+from gi.repository import ICalGLib  # noqa: F401
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 from rich.text import Text
 
 
@@ -79,22 +82,31 @@ def collect_multi(vevent, kind, getter):
 def dump_event(vevent, console: Console, show_raw: bool = True) -> None:
     """Render a single VEVENT as a Rich Panel."""
     uid = vevent.get_uid() or "(no UID)"
-    summary = fmt_prop(vevent, ICalGLib.PropertyKind.SUMMARY_PROPERTY,
-                       lambda p: p.get_summary()) or "(no summary)"
-    rid = fmt_prop(vevent, ICalGLib.PropertyKind.RECURRENCEID_PROPERTY,
-                   lambda p: p.get_value_as_string())
-    transp = fmt_prop(vevent, ICalGLib.PropertyKind.TRANSP_PROPERTY,
-                      lambda p: p.get_value_as_string())
-    status = fmt_prop(vevent, ICalGLib.PropertyKind.STATUS_PROPERTY,
-                      lambda p: p.get_value_as_string())
-    dtstart = fmt_prop(vevent, ICalGLib.PropertyKind.DTSTART_PROPERTY,
-                       lambda p: p.get_value_as_string())
-    dtend = fmt_prop(vevent, ICalGLib.PropertyKind.DTEND_PROPERTY,
-                     lambda p: p.get_value_as_string())
-    rrule = fmt_prop(vevent, ICalGLib.PropertyKind.RRULE_PROPERTY,
-                     lambda p: p.get_value_as_string())
-    exdates = collect_multi(vevent, ICalGLib.PropertyKind.EXDATE_PROPERTY,
-                            lambda p: p.get_value_as_string())
+    summary = (
+        fmt_prop(vevent, ICalGLib.PropertyKind.SUMMARY_PROPERTY, lambda p: p.get_summary())
+        or "(no summary)"
+    )
+    rid = fmt_prop(
+        vevent, ICalGLib.PropertyKind.RECURRENCEID_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    transp = fmt_prop(
+        vevent, ICalGLib.PropertyKind.TRANSP_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    status = fmt_prop(
+        vevent, ICalGLib.PropertyKind.STATUS_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    dtstart = fmt_prop(
+        vevent, ICalGLib.PropertyKind.DTSTART_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    dtend = fmt_prop(
+        vevent, ICalGLib.PropertyKind.DTEND_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    rrule = fmt_prop(
+        vevent, ICalGLib.PropertyKind.RRULE_PROPERTY, lambda p: p.get_value_as_string()
+    )
+    exdates = collect_multi(
+        vevent, ICalGLib.PropertyKind.EXDATE_PROPERTY, lambda p: p.get_value_as_string()
+    )
 
     lines = Text()
 
@@ -119,8 +131,8 @@ def dump_event(vevent, console: Console, show_raw: bool = True) -> None:
     # X-properties
     x_prop = vevent.get_first_property(ICalGLib.PropertyKind.X_PROPERTY)
     while x_prop:
-        name = x_prop.get_x_name() or ''
-        val = x_prop.get_x() or x_prop.get_value_as_string() or ''
+        name = x_prop.get_x_name() or ""
+        val = x_prop.get_x() or x_prop.get_value_as_string() or ""
         lines.append(f"  {name:<14}: ", style="bold cyan")
         lines.append(f"{val}\n")
         x_prop = vevent.get_next_property(ICalGLib.PropertyKind.X_PROPERTY)
@@ -128,7 +140,7 @@ def dump_event(vevent, console: Console, show_raw: bool = True) -> None:
     # Attendees
     attendees = vevent.get_first_property(ICalGLib.PropertyKind.ATTENDEE_PROPERTY)
     while attendees:
-        val = attendees.get_attendee() or ''
+        val = attendees.get_attendee() or ""
         ps_p = attendees.get_first_parameter(ICalGLib.ParameterKind.PARTSTAT_PARAMETER)
         partstat = ps_p.get_partstat() if ps_p else None
         rl_p = attendees.get_first_parameter(ICalGLib.ParameterKind.ROLE_PARAMETER)
@@ -141,8 +153,10 @@ def dump_event(vevent, console: Console, show_raw: bool = True) -> None:
 
     if show_raw:
         raw = vevent.as_ical_string()
-        console.print(Panel(
-            Syntax(raw, "ical", theme="monokai", word_wrap=True),
-            title="Raw iCal",
-            expand=False,
-        ))
+        console.print(
+            Panel(
+                Syntax(raw, "ical", theme="monokai", word_wrap=True),
+                title="Raw iCal",
+                expand=False,
+            )
+        )

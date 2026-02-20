@@ -3,18 +3,21 @@ Personal→Work one-way sync.
 """
 
 import uuid
-from typing import Dict, Set
 
 import gi
-gi.require_version('GLib', '2.0')
+
+gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
-from ..models import CalendarSyncError, SyncConfig, SyncStats
-from ..eds_client import EDSCalendarClient
-from ..db import StateDatabase
-from ..sanitizer import EventSanitizer
-from .refresh import perform_refresh_to_work
-from .utils import compute_hash, parse_component
+from eds_calendar_sync.db import StateDatabase
+from eds_calendar_sync.eds_client import EDSCalendarClient
+from eds_calendar_sync.models import CalendarSyncError
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.models import SyncStats
+from eds_calendar_sync.sanitizer import EventSanitizer
+from eds_calendar_sync.sync.refresh import perform_refresh_to_work
+from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import parse_component
 
 
 def _process_creates_to_work(
@@ -37,7 +40,7 @@ def _process_creates_to_work(
 
     try:
         # Use 'busy' mode sanitization for personal → work
-        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode='busy')
+        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode="busy")
 
         if config.verbose:
             sanitized_str = sanitized.as_ical_string()
@@ -61,7 +64,7 @@ def _process_creates_to_work(
             work_hash = compute_hash(sanitized.as_ical_string())
 
         # source=work, target=personal, origin='target' (event originated from personal calendar)
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, 'target')
+        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "target")
         stats.added += 1
         logger.debug(f"Created event {personal_uid} as {work_uid} in work calendar")
     except (GLib.Error, CalendarSyncError) as e:
@@ -88,7 +91,7 @@ def _process_updates_to_work(
 
     try:
         # Use 'busy' mode sanitization for personal → work
-        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode='busy')
+        sanitized = EventSanitizer.sanitize(ical_str, work_uid, mode="busy")
         work_client.modify_event(sanitized)
 
         # Fetch the event back to get the actual stored version
@@ -115,7 +118,7 @@ def _process_updates_to_work(
 
             # Create new with fresh UUID (will be rewritten by server)
             new_uid = str(uuid.uuid4())
-            sanitized = EventSanitizer.sanitize(ical_str, new_uid, mode='busy')
+            sanitized = EventSanitizer.sanitize(ical_str, new_uid, mode="busy")
             actual_uid = work_client.create_event(sanitized)
 
             # Update state with new UID if returned
@@ -132,7 +135,7 @@ def _process_updates_to_work(
 
             # Update state DB with new work UID (source=work, target=personal, origin='target')
             state_db.delete_by_pair(work_uid, personal_uid)
-            state_db.insert_bidirectional(new_uid, personal_uid, work_hash, personal_hash, 'target')
+            state_db.insert_bidirectional(new_uid, personal_uid, work_hash, personal_hash, "target")
             stats.modified += 1
             logger.debug(f"Recreated event {personal_uid} as {new_uid} in work calendar")
         except (GLib.Error, CalendarSyncError) as e2:
@@ -144,29 +147,25 @@ def _process_deletions_to_work(
     config: SyncConfig,
     stats: SyncStats,
     logger,
-    state: Dict[str, Dict[str, str]],
-    personal_uids_seen: Set[str],
+    state: dict[str, dict[str, str]],
+    personal_uids_seen: set[str],
     work_client: EDSCalendarClient,
     state_db: StateDatabase,
 ):
     """Handle deletion of events removed from personal calendar."""
     for personal_uid in list(state.keys()):
         if personal_uid not in personal_uids_seen:
-            work_uid = state[personal_uid]['source_uid']
+            work_uid = state[personal_uid]["source_uid"]
 
             if config.dry_run:
-                logger.info(
-                    f"[DRY RUN] Would DELETE event: {personal_uid} (work: {work_uid})"
-                )
+                logger.info(f"[DRY RUN] Would DELETE event: {personal_uid} (work: {work_uid})")
                 stats.deleted += 1
                 continue
 
             logger.debug(f"Attempting to delete work event with UID: {work_uid}")
             try:
                 work_client.remove_event(work_uid)
-                logger.debug(
-                    f"Successfully deleted event {personal_uid} (work: {work_uid})"
-                )
+                logger.debug(f"Successfully deleted event {personal_uid} (work: {work_uid})")
             except (GLib.Error, CalendarSyncError) as e:
                 logger.error(f"Failed to delete {work_uid}: {e}")
                 stats.errors += 1
@@ -197,7 +196,7 @@ def run_one_way_to_work(
         # Fetch personal events (source)
         logger.info("Fetching personal events...")
         personal_events = personal_client.get_all_events()
-        personal_uids_seen: Set[str] = set()
+        personal_uids_seen: set[str] = set()
 
         # Process each personal event
         logger.info(f"Processing {len(personal_events)} personal events...")
@@ -220,16 +219,20 @@ def run_one_way_to_work(
             if personal_uid not in state:
                 # CREATE in work calendar
                 _process_creates_to_work(
-                    config, stats, logger,
-                    personal_uid, ical_str, obj_hash, work_client, state_db
+                    config, stats, logger, personal_uid, ical_str, obj_hash, work_client, state_db
                 )
-            elif obj_hash != state[personal_uid]['hash']:
+            elif obj_hash != state[personal_uid]["hash"]:
                 # UPDATE in work calendar
                 _process_updates_to_work(
-                    config, stats, logger,
-                    personal_uid, ical_str, obj_hash,
-                    state[personal_uid]['source_uid'],
-                    work_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    personal_uid,
+                    ical_str,
+                    obj_hash,
+                    state[personal_uid]["source_uid"],
+                    work_client,
+                    state_db,
                 )
 
         # Process deletions

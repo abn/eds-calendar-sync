@@ -3,12 +3,13 @@ iCal event sanitization — strips sensitive data before syncing.
 """
 
 import datetime
-from typing import Set
 
 import gi
-gi.require_version('ICalGLib', '3.0')
-gi.require_version('GLib', '2.0')
-from gi.repository import ICalGLib, GLib  # noqa: F401 (GLib kept for version side-effect)
+
+gi.require_version("ICalGLib", "3.0")
+gi.require_version("GLib", "2.0")
+from gi.repository import GLib  # noqa: F401 (GLib kept for version side-effect)
+from gi.repository import ICalGLib  # noqa: F401 (GLib kept for version side-effect)
 
 
 class EventSanitizer:
@@ -44,7 +45,7 @@ class EventSanitizer:
             subcomp = component.get_first_component(comp_kind)
 
     @classmethod
-    def sanitize(cls, ical_string: str, new_uid: str, mode: str = 'normal') -> ICalGLib.Component:
+    def sanitize(cls, ical_string: str, new_uid: str, mode: str = "normal") -> ICalGLib.Component:
         """
         Parse an iCal string, replace UID, and strip sensitive data.
 
@@ -103,7 +104,7 @@ class EventSanitizer:
             cls._remove_all_components(event, ICalGLib.ComponentKind.VALARM_COMPONENT)
 
             # For 'busy' mode, replace title with "Busy"
-            if mode == 'busy':
+            if mode == "busy":
                 cls._remove_all_properties(event, ICalGLib.PropertyKind.SUMMARY_PROPERTY)
                 event.add_property(ICalGLib.Property.new_summary("Busy"))
 
@@ -116,27 +117,21 @@ class EventSanitizer:
             _dts_prop = event.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
             _rrule_prop = event.get_first_property(ICalGLib.PropertyKind.RRULE_PROPERTY)
             if _dts_prop and _rrule_prop:
-                _exdates: Set[str] = set()
+                _exdates: set[str] = set()
                 _ed_p = event.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
                 while _ed_p:
                     try:
                         _et = _ed_p.get_exdate()
                         if _et and not _et.is_null_time():
                             _exdates.add(
-                                f"{_et.get_year():04d}"
-                                f"{_et.get_month():02d}"
-                                f"{_et.get_day():02d}"
+                                f"{_et.get_year():04d}{_et.get_month():02d}{_et.get_day():02d}"
                             )
                     except Exception:
                         pass
                     _ed_p = event.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
                 if _exdates:
                     _dts = _dts_prop.get_dtstart()
-                    _dts_date = (
-                        f"{_dts.get_year():04d}"
-                        f"{_dts.get_month():02d}"
-                        f"{_dts.get_day():02d}"
-                    )
+                    _dts_date = f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"
                     if _dts_date in _exdates:
                         try:
                             # Compute event duration so DTEND can be shifted by the
@@ -147,12 +142,20 @@ class EventSanitizer:
                             if _dte_prop:
                                 _dte = _dte_prop.get_dtend()
                                 _dts_py = datetime.datetime(
-                                    _dts.get_year(), _dts.get_month(), _dts.get_day(),
-                                    _dts.get_hour(), _dts.get_minute(), _dts.get_second(),
+                                    _dts.get_year(),
+                                    _dts.get_month(),
+                                    _dts.get_day(),
+                                    _dts.get_hour(),
+                                    _dts.get_minute(),
+                                    _dts.get_second(),
                                 )
                                 _dte_py = datetime.datetime(
-                                    _dte.get_year(), _dte.get_month(), _dte.get_day(),
-                                    _dte.get_hour(), _dte.get_minute(), _dte.get_second(),
+                                    _dte.get_year(),
+                                    _dte.get_month(),
+                                    _dte.get_day(),
+                                    _dte.get_hour(),
+                                    _dte.get_minute(),
+                                    _dte.get_second(),
                                 )
                                 _dur = _dte_py - _dts_py
                             else:
@@ -177,8 +180,12 @@ class EventSanitizer:
                                         ICalGLib.ParameterKind.TZID_PARAMETER
                                     )
                                     _occ_py = datetime.datetime(
-                                        _occ.get_year(), _occ.get_month(), _occ.get_day(),
-                                        _occ.get_hour(), _occ.get_minute(), _occ.get_second(),
+                                        _occ.get_year(),
+                                        _occ.get_month(),
+                                        _occ.get_day(),
+                                        _occ.get_hour(),
+                                        _occ.get_minute(),
+                                        _occ.get_second(),
                                     )
                                     _new_dte_py = _occ_py + _dur
                                     if _tzid_param:
@@ -247,7 +254,7 @@ class EventSanitizer:
                         f"{_dts_norm.get_minute():02d}"
                         f"{_dts_norm.get_second():02d}"
                     )
-                    _date_exdates: Set[str] = set()
+                    _date_exdates: set[str] = set()
                     _ed_n = event.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
                     while _ed_n:
                         try:

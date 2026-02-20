@@ -3,14 +3,17 @@ Refresh and clear operations — remove synced events from calendars.
 """
 
 import gi
-gi.require_version('GLib', '2.0')
+
+gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
-from ..models import CalendarSyncError, SyncConfig, SyncStats
-from ..eds_client import EDSCalendarClient
-from ..db import StateDatabase
-from ..sanitizer import EventSanitizer
-from .utils import parse_component
+from eds_calendar_sync.db import StateDatabase
+from eds_calendar_sync.eds_client import EDSCalendarClient
+from eds_calendar_sync.models import CalendarSyncError
+from eds_calendar_sync.models import SyncConfig
+from eds_calendar_sync.models import SyncStats
+from eds_calendar_sync.sanitizer import EventSanitizer
+from eds_calendar_sync.sync.utils import parse_component
 
 
 def perform_refresh(
@@ -25,7 +28,7 @@ def perform_refresh(
 
     # Get all events we've created (tracked in state DB)
     state = state_db.get_all_state()
-    personal_uids_to_delete = [s['target_uid'] for s in state.values()]
+    personal_uids_to_delete = [s["target_uid"] for s in state.values()]
 
     # If state DB is empty, fall back to metadata scanning
     if len(personal_uids_to_delete) == 0:
@@ -65,9 +68,7 @@ def perform_refresh(
     state_db.clear_all()
     state_db.commit()
 
-    logger.info(
-        f"Refresh complete: Removed {deleted_count} synced events (other events preserved)"
-    )
+    logger.info(f"Refresh complete: Removed {deleted_count} synced events (other events preserved)")
 
 
 def perform_refresh_two_way(
@@ -79,9 +80,7 @@ def perform_refresh_two_way(
     state_db: StateDatabase,
 ):
     """Delete only synced events we created in both calendars, leaving other events untouched."""
-    logger.warning(
-        "REFRESH MODE (TWO-WAY): Removing synced events from both calendars..."
-    )
+    logger.warning("REFRESH MODE (TWO-WAY): Removing synced events from both calendars...")
 
     # Get all sync pairs
     state_records = state_db.get_all_state_bidirectional()
@@ -90,13 +89,13 @@ def perform_refresh_two_way(
     personal_uids_to_delete = []
 
     for record in state_records:
-        work_uid = record['source_uid']
-        personal_uid = record['target_uid']
-        origin = record['origin']
+        work_uid = record["source_uid"]
+        personal_uid = record["target_uid"]
+        origin = record["origin"]
 
-        if origin == 'source':  # Work→Personal sync (we created event in personal)
+        if origin == "source":  # Work→Personal sync (we created event in personal)
             personal_uids_to_delete.append(personal_uid)
-        elif origin == 'target':  # Personal→Work sync (we created event in work)
+        elif origin == "target":  # Personal→Work sync (we created event in work)
             work_uids_to_delete.append(work_uid)
 
     # If state DB is empty, fall back to metadata scanning
@@ -178,7 +177,7 @@ def perform_refresh_to_work(
 
     # Get all events we've created in work calendar (tracked in state DB)
     state = state_db.get_all_state_by_target()
-    work_uids_to_delete = [s['source_uid'] for s in state.values()]
+    work_uids_to_delete = [s["source_uid"] for s in state.values()]
 
     # If state DB is empty, fall back to metadata scanning
     if len(work_uids_to_delete) == 0:
@@ -217,9 +216,7 @@ def perform_refresh_to_work(
     state_db.clear_all()
     state_db.commit()
 
-    logger.info(
-        f"Refresh complete: Removed {deleted_count} synced events from work calendar"
-    )
+    logger.info(f"Refresh complete: Removed {deleted_count} synced events from work calendar")
 
 
 def perform_clear(
@@ -237,7 +234,7 @@ def perform_clear(
     personal_managed = []
 
     # Scan calendars based on sync direction
-    if config.sync_direction in ('both', 'to-work'):
+    if config.sync_direction in ("both", "to-work"):
         # We create events in work calendar when syncing to work
         logger.info("Scanning work calendar for managed events...")
         work_events = work_client.get_all_events()
@@ -246,7 +243,7 @@ def perform_clear(
             if EventSanitizer.is_managed_event(comp):
                 work_managed.append(comp.get_uid())
 
-    if config.sync_direction in ('both', 'to-personal'):
+    if config.sync_direction in ("both", "to-personal"):
         # We create events in personal calendar when syncing to personal
         logger.info("Scanning personal calendar for managed events...")
         personal_events = personal_client.get_all_events()
@@ -260,9 +257,9 @@ def perform_clear(
     # Report findings based on what we scanned
     if total_to_delete > 0:
         parts = []
-        if config.sync_direction in ('both', 'to-work') and len(work_managed) > 0:
+        if config.sync_direction in ("both", "to-work") and len(work_managed) > 0:
             parts.append(f"{len(work_managed)} in work calendar")
-        if config.sync_direction in ('both', 'to-personal') and len(personal_managed) > 0:
+        if config.sync_direction in ("both", "to-personal") and len(personal_managed) > 0:
             parts.append(f"{len(personal_managed)} in personal calendar")
         logger.info(f"Found {' and '.join(parts)} managed events")
     else:
@@ -280,7 +277,7 @@ def perform_clear(
 
     # Delete managed events from work calendar (if applicable)
     work_deleted = 0
-    if config.sync_direction in ('both', 'to-work'):
+    if config.sync_direction in ("both", "to-work"):
         for uid in work_managed:
             try:
                 work_client.remove_event(uid)
@@ -292,7 +289,7 @@ def perform_clear(
 
     # Delete managed events from personal calendar (if applicable)
     personal_deleted = 0
-    if config.sync_direction in ('both', 'to-personal'):
+    if config.sync_direction in ("both", "to-personal"):
         for uid in personal_managed:
             try:
                 personal_client.remove_event(uid)
@@ -307,7 +304,6 @@ def perform_clear(
     state_db.commit()
 
     logger.info(
-        f"Clear complete: Removed {work_deleted} work events, "
-        f"{personal_deleted} personal events"
+        f"Clear complete: Removed {work_deleted} work events, {personal_deleted} personal events"
     )
     stats.deleted = work_deleted + personal_deleted
