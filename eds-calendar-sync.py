@@ -115,8 +115,10 @@ def get_calendar_display_info(calendar_uid: str) -> Tuple[str, str, str]:
 class StateDatabase:
     """Manages SQLite state database for sync tracking."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, work_calendar_id: str, personal_calendar_id: str):
         self.db_path = db_path
+        self.work_calendar_id = work_calendar_id
+        self.personal_calendar_id = personal_calendar_id
         self.conn: Optional[sqlite3.Connection] = None
 
     def __enter__(self):
@@ -134,10 +136,12 @@ class StateDatabase:
         self._init_schema()
 
     def _init_schema(self):
-        """Create the sync_state table if it doesn't exist."""
+        """Create the sync_state table if it doesn't exist (new schema)."""
         self.conn.execute('''
             CREATE TABLE IF NOT EXISTS sync_state (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_calendar_id TEXT NOT NULL,
+                personal_calendar_id TEXT NOT NULL,
                 source_uid TEXT NOT NULL,
                 target_uid TEXT NOT NULL,
                 source_hash TEXT NOT NULL,
@@ -145,42 +149,185 @@ class StateDatabase:
                 origin TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 last_sync_at INTEGER NOT NULL,
-                UNIQUE(source_uid, target_uid)
+                UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
             )
         ''')
         self.conn.commit()
 
+    def migrate_if_needed(self, is_refresh_or_clear: bool):
+        """
+        Detect and handle schema migration from the old single-pair format.
+
+        Old schema had no work_calendar_id/personal_calendar_id columns and used
+        an inverted source/target convention for --only-to-work records.
+
+        If old schema is detected:
+        - Rebuilds the table with the new schema.
+        - Assigns the current calendar pair to all existing rows (assumes they
+          all belong to this pair — correct for any single-pair user).
+        - If inverted records (origin='target') are present and this is not a
+          refresh/clear run, raises CalendarSyncError asking the user to run
+          --refresh first (those records may be in the old inverted convention
+          and cannot be safely kept without re-verification).
+        - On a refresh/clear run, deletes inverted records so the refresh
+          fallback scan can rebuild state cleanly from calendar metadata.
+        """
+        logger = logging.getLogger(__name__)
+
+        # Detect old schema by checking for the work_calendar_id column
+        cursor = self.conn.execute("PRAGMA table_info(sync_state)")
+        columns = {row['name'] for row in cursor.fetchall()}
+        if 'work_calendar_id' in columns:
+            return  # Already on new schema, nothing to do
+
+        logger.info("Migrating state database to new schema (adding calendar pair columns)...")
+
+        # Count inverted records before rebuilding
+        inverted_count = self.conn.execute(
+            "SELECT COUNT(*) FROM sync_state WHERE origin = 'target'"
+        ).fetchone()[0]
+        total_count = self.conn.execute(
+            "SELECT COUNT(*) FROM sync_state"
+        ).fetchone()[0]
+
+        # Rebuild the table with the new schema, carrying over existing rows
+        # with empty calendar pair placeholders (filled in below).
+        self.conn.executescript('''
+            CREATE TABLE sync_state_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_calendar_id TEXT NOT NULL,
+                personal_calendar_id TEXT NOT NULL,
+                source_uid TEXT NOT NULL,
+                target_uid TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                target_hash TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_sync_at INTEGER NOT NULL,
+                UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
+            );
+            INSERT INTO sync_state_new
+                (work_calendar_id, personal_calendar_id,
+                 source_uid, target_uid,
+                 source_hash, target_hash, origin,
+                 created_at, last_sync_at)
+                SELECT '', '', source_uid, target_uid,
+                       source_hash, target_hash, origin,
+                       created_at, last_sync_at
+                FROM sync_state;
+            DROP TABLE sync_state;
+            ALTER TABLE sync_state_new RENAME TO sync_state;
+        ''')
+
+        # Handle inverted (origin='target') records from old --only-to-work runs
+        if inverted_count > 0:
+            if is_refresh_or_clear:
+                # Delete them so the refresh fallback scan rebuilds state cleanly
+                self.conn.execute("DELETE FROM sync_state WHERE origin = 'target'")
+                logger.warning(
+                    f"Migration: deleted {inverted_count} old sync record(s) with "
+                    f"origin='target' that could not be safely migrated. "
+                    f"A calendar scan will be used to find managed events to clean up."
+                )
+            else:
+                # Assign pair IDs to origin='source' rows so they're not lost,
+                # then raise — the user must run --refresh to handle the rest.
+                remaining = total_count - inverted_count
+                if remaining > 0:
+                    self.conn.execute(
+                        "UPDATE sync_state SET work_calendar_id = ?, personal_calendar_id = ? "
+                        "WHERE origin = 'source'",
+                        (self.work_calendar_id, self.personal_calendar_id)
+                    )
+                self.conn.commit()
+                raise CalendarSyncError(
+                    f"State database schema has been updated. "
+                    f"Found {inverted_count} record(s) with origin='target' that "
+                    f"may be in an old inverted format and cannot be safely migrated "
+                    f"automatically.\n"
+                    f"Please run with --refresh to clean up and re-sync, "
+                    f"or --clear to remove all synced events."
+                )
+
+        # Assign the current calendar pair to all remaining rows
+        if total_count > 0:
+            self.conn.execute(
+                "UPDATE sync_state SET work_calendar_id = ?, personal_calendar_id = ?",
+                (self.work_calendar_id, self.personal_calendar_id)
+            )
+            kept = total_count - inverted_count
+            logger.info(
+                f"Migration complete: kept {kept} existing record(s), "
+                f"assigned to current calendar pair."
+            )
+        else:
+            logger.info("Migration complete: no existing records to migrate.")
+
+        self.conn.commit()
+
+    # ------------------------------------------------------------------ #
+    # Query methods — all scoped to the current (work, personal) pair     #
+    # ------------------------------------------------------------------ #
+
     def get_all_state(self) -> Dict[str, Dict[str, str]]:
-        """Retrieve all sync state records (one-way compatibility)."""
+        """Retrieve work→personal sync records for this calendar pair.
+
+        Returns records with origin='source' only (work-originated events).
+        Keyed by source_uid (work event UID).
+        """
         cursor = self.conn.execute(
-            "SELECT source_uid, target_uid, source_hash FROM sync_state"
+            "SELECT source_uid, target_uid, source_hash FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND origin = 'source'",
+            (self.work_calendar_id, self.personal_calendar_id)
         )
         return {
             row[0]: {'target_uid': row[1], 'hash': row[2]}
             for row in cursor.fetchall()
         }
 
+    def get_all_state_by_target(self) -> Dict[str, Dict[str, str]]:
+        """Retrieve personal→work sync records for this calendar pair.
+
+        Returns records with origin='target' only (personal-originated events).
+        Keyed by target_uid (personal event UID).
+        """
+        cursor = self.conn.execute(
+            "SELECT source_uid, target_uid, target_hash FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND origin = 'target'",
+            (self.work_calendar_id, self.personal_calendar_id)
+        )
+        return {
+            row[1]: {'source_uid': row[0], 'hash': row[2]}
+            for row in cursor.fetchall()
+        }
+
     def get_all_state_bidirectional(self) -> list:
-        """Retrieve all sync state records for bidirectional sync."""
-        cursor = self.conn.execute('''
-            SELECT id, source_uid, target_uid, source_hash, target_hash, origin, created_at, last_sync_at
-            FROM sync_state
-        ''')
+        """Retrieve all sync state records for this calendar pair."""
+        cursor = self.conn.execute(
+            "SELECT id, source_uid, target_uid, source_hash, target_hash, "
+            "origin, created_at, last_sync_at FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ?",
+            (self.work_calendar_id, self.personal_calendar_id)
+        )
         return cursor.fetchall()
 
     def get_by_source_uid(self, source_uid: str) -> Optional[sqlite3.Row]:
-        """Get state record by source UID."""
+        """Get state record by source UID for this calendar pair."""
         cursor = self.conn.execute(
-            "SELECT * FROM sync_state WHERE source_uid = ? LIMIT 1",
-            (source_uid,)
+            "SELECT * FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+            "AND source_uid = ? LIMIT 1",
+            (self.work_calendar_id, self.personal_calendar_id, source_uid)
         )
         return cursor.fetchone()
 
     def get_by_target_uid(self, target_uid: str) -> Optional[sqlite3.Row]:
-        """Get state record by target UID."""
+        """Get state record by target UID for this calendar pair."""
         cursor = self.conn.execute(
-            "SELECT * FROM sync_state WHERE target_uid = ? LIMIT 1",
-            (target_uid,)
+            "SELECT * FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+            "AND target_uid = ? LIMIT 1",
+            (self.work_calendar_id, self.personal_calendar_id, target_uid)
         )
         return cursor.fetchone()
 
@@ -188,57 +335,80 @@ class StateDatabase:
         """Insert a new sync state record (one-way compatibility)."""
         import time
         timestamp = int(time.time())
-        self.conn.execute('''
-            INSERT INTO sync_state
-            (source_uid, target_uid, source_hash, target_hash, origin, created_at, last_sync_at)
-            VALUES (?, ?, ?, ?, 'source', ?, ?)
-        ''', (source_uid, target_uid, content_hash, content_hash, timestamp, timestamp))
+        self.conn.execute(
+            "INSERT INTO sync_state "
+            "(work_calendar_id, personal_calendar_id, "
+            " source_uid, target_uid, source_hash, target_hash, "
+            " origin, created_at, last_sync_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'source', ?, ?)",
+            (self.work_calendar_id, self.personal_calendar_id,
+             source_uid, target_uid, content_hash, content_hash,
+             timestamp, timestamp)
+        )
 
     def insert_bidirectional(self, source_uid: str, target_uid: str,
                             source_hash: str, target_hash: str, origin: str):
-        """Insert new bidirectional sync record."""
+        """Insert new bidirectional sync record for this calendar pair."""
         import time
         timestamp = int(time.time())
-        self.conn.execute('''
-            INSERT INTO sync_state
-            (source_uid, target_uid, source_hash, target_hash, origin, created_at, last_sync_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (source_uid, target_uid, source_hash, target_hash, origin, timestamp, timestamp))
+        self.conn.execute(
+            "INSERT INTO sync_state "
+            "(work_calendar_id, personal_calendar_id, "
+            " source_uid, target_uid, source_hash, target_hash, "
+            " origin, created_at, last_sync_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (self.work_calendar_id, self.personal_calendar_id,
+             source_uid, target_uid, source_hash, target_hash,
+             origin, timestamp, timestamp)
+        )
 
     def update_hash(self, source_uid: str, content_hash: str):
         """Update the hash for an existing record (one-way compatibility)."""
         import time
         self.conn.execute(
-            "UPDATE sync_state SET source_hash = ?, target_hash = ?, last_sync_at = ? WHERE source_uid = ?",
-            (content_hash, content_hash, int(time.time()), source_uid)
+            "UPDATE sync_state SET source_hash = ?, target_hash = ?, last_sync_at = ? "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND source_uid = ?",
+            (content_hash, content_hash, int(time.time()),
+             self.work_calendar_id, self.personal_calendar_id, source_uid)
         )
 
     def update_hashes(self, source_uid: str, target_uid: str, source_hash: str, target_hash: str):
         """Update both hashes after successful sync."""
         import time
-        self.conn.execute('''
-            UPDATE sync_state
-            SET source_hash = ?, target_hash = ?, last_sync_at = ?
-            WHERE source_uid = ? AND target_uid = ?
-        ''', (source_hash, target_hash, int(time.time()), source_uid, target_uid))
+        self.conn.execute(
+            "UPDATE sync_state "
+            "SET source_hash = ?, target_hash = ?, last_sync_at = ? "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+            "AND source_uid = ? AND target_uid = ?",
+            (source_hash, target_hash, int(time.time()),
+             self.work_calendar_id, self.personal_calendar_id,
+             source_uid, target_uid)
+        )
 
     def delete(self, source_uid: str):
-        """Delete a sync state record (one-way compatibility)."""
+        """Delete a sync state record by source UID for this calendar pair."""
         self.conn.execute(
-            "DELETE FROM sync_state WHERE source_uid = ?",
-            (source_uid,)
+            "DELETE FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND source_uid = ?",
+            (self.work_calendar_id, self.personal_calendar_id, source_uid)
         )
 
     def delete_by_pair(self, source_uid: str, target_uid: str):
-        """Delete by the (source_uid, target_uid) pair."""
+        """Delete by the (source_uid, target_uid) pair for this calendar pair."""
         self.conn.execute(
-            "DELETE FROM sync_state WHERE source_uid = ? AND target_uid = ?",
-            (source_uid, target_uid)
+            "DELETE FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+            "AND source_uid = ? AND target_uid = ?",
+            (self.work_calendar_id, self.personal_calendar_id, source_uid, target_uid)
         )
 
     def clear_all(self):
-        """Remove all state records (for refresh)."""
-        self.conn.execute("DELETE FROM sync_state")
+        """Remove all state records for this calendar pair (for refresh/clear)."""
+        self.conn.execute(
+            "DELETE FROM sync_state "
+            "WHERE work_calendar_id = ? AND personal_calendar_id = ?",
+            (self.work_calendar_id, self.personal_calendar_id)
+        )
 
     def commit(self):
         """Commit pending transactions."""
@@ -1197,8 +1367,8 @@ class CalendarSynchronizer:
         self.logger.warning("REFRESH MODE: Removing synced events from work calendar...")
 
         # Get all events we've created in work calendar (tracked in state DB)
-        state = state_db.get_all_state()
-        work_uids_to_delete = [s['target_uid'] for s in state.values()]
+        state = state_db.get_all_state_by_target()
+        work_uids_to_delete = [s['source_uid'] for s in state.values()]
 
         # If state DB is empty, fall back to metadata scanning
         if len(work_uids_to_delete) == 0:
@@ -1280,8 +1450,8 @@ class CalendarSynchronizer:
                 # Fallback if fetch fails
                 work_hash = self._compute_hash(sanitized.as_ical_string())
 
-            # Note: source=personal, target=work, origin='target' (originated from target/personal calendar)
-            state_db.insert_bidirectional(personal_uid, work_uid, personal_hash, work_hash, 'target')
+            # source=work, target=personal, origin='target' (event originated from personal calendar)
+            state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, 'target')
             self.stats.added += 1
             self.logger.debug(f"Created event {personal_uid} as {work_uid} in work calendar")
         except (GLib.Error, CalendarSyncError) as e:
@@ -1319,7 +1489,7 @@ class CalendarSynchronizer:
                 # Fallback if fetch fails
                 work_hash = self._compute_hash(sanitized.as_ical_string())
 
-            state_db.update_hashes(personal_uid, work_uid, personal_hash, work_hash)
+            state_db.update_hashes(work_uid, personal_uid, work_hash, personal_hash)
             self.stats.modified += 1
             self.logger.debug(f"Updated event {personal_uid} in work calendar")
         except (GLib.Error, CalendarSyncError) as e:
@@ -1349,9 +1519,9 @@ class CalendarSynchronizer:
                 else:
                     work_hash = self._compute_hash(sanitized.as_ical_string())
 
-                # Update state DB with new work UID
-                state_db.delete(personal_uid)
-                state_db.insert_bidirectional(personal_uid, new_uid, personal_hash, work_hash, 'target')
+                # Update state DB with new work UID (source=work, target=personal, origin='target')
+                state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.insert_bidirectional(new_uid, personal_uid, work_hash, personal_hash, 'target')
                 self.stats.modified += 1
                 self.logger.debug(f"Recreated event {personal_uid} as {new_uid} in work calendar")
             except (GLib.Error, CalendarSyncError) as e2:
@@ -1368,7 +1538,7 @@ class CalendarSynchronizer:
         """Handle deletion of events removed from personal calendar."""
         for personal_uid in list(state.keys()):
             if personal_uid not in personal_uids_seen:
-                work_uid = state[personal_uid]['target_uid']
+                work_uid = state[personal_uid]['source_uid']
 
                 if self.config.dry_run:
                     self.logger.info(
@@ -1386,7 +1556,7 @@ class CalendarSynchronizer:
                     self.stats.errors += 1
                     continue
 
-                state_db.delete(personal_uid)
+                state_db.delete_by_pair(work_uid, personal_uid)
                 self.stats.deleted += 1
 
     def _run_one_way_to_work(self) -> SyncStats:
@@ -1396,14 +1566,20 @@ class CalendarSynchronizer:
             work_client, personal_client = self._setup_clients()
 
             # Open state database
-            with StateDatabase(self.config.state_db_path) as state_db:
+            with StateDatabase(
+                self.config.state_db_path,
+                self.config.work_calendar_id,
+                self.config.personal_calendar_id,
+            ) as state_db:
+                state_db.migrate_if_needed(self.config.refresh or self.config.clear)
+
                 # Handle refresh mode
                 if self.config.refresh:
                     self._perform_refresh_to_work(work_client, state_db)
 
-                # Load current state
+                # Load current state keyed by personal (target) UID
                 self.logger.info("Loading sync state...")
-                state = state_db.get_all_state()
+                state = state_db.get_all_state_by_target()
 
                 # Fetch personal events (source)
                 self.logger.info("Fetching personal events...")
@@ -1415,6 +1591,14 @@ class CalendarSynchronizer:
                 for obj in personal_events:
                     comp = self._parse_component(obj)
                     personal_uid = comp.get_uid()
+
+                    # Skip events we created ourselves (managed events in the personal
+                    # calendar are copies of work events, synced by --only-to-personal
+                    # or --both).  Re-syncing them to work would create circular duplicates.
+                    if EventSanitizer.is_managed_event(comp):
+                        self.logger.debug(f"Skipping managed event: {personal_uid}")
+                        continue
+
                     personal_uids_seen.add(personal_uid)
 
                     ical_str = comp.as_ical_string()
@@ -1429,7 +1613,7 @@ class CalendarSynchronizer:
                         # UPDATE in work calendar
                         self._process_updates_to_work(
                             personal_uid, ical_str, obj_hash,
-                            state[personal_uid]['target_uid'],
+                            state[personal_uid]['source_uid'],
                             work_client, state_db
                         )
 
@@ -1459,7 +1643,13 @@ class CalendarSynchronizer:
             work_client, personal_client = self._setup_clients()
 
             # Open state database
-            with StateDatabase(self.config.state_db_path) as state_db:
+            with StateDatabase(
+                self.config.state_db_path,
+                self.config.work_calendar_id,
+                self.config.personal_calendar_id,
+            ) as state_db:
+                state_db.migrate_if_needed(self.config.refresh or self.config.clear)
+
                 # Handle refresh mode
                 if self.config.refresh:
                     self._perform_refresh_two_way(work_client, personal_client, state_db)
@@ -1507,6 +1697,12 @@ class CalendarSynchronizer:
                 # Phase 2: Process new work events (not yet synced)
                 for work_uid, work_comp in work_events.items():
                     if work_uid not in work_uids_processed:
+                        # Skip managed events — they are "Busy" blocks we created in
+                        # work from personal events.  Syncing them back to personal
+                        # would produce circular duplicates.
+                        if EventSanitizer.is_managed_event(work_comp):
+                            self.logger.debug(f"Skipping managed work event: {work_uid}")
+                            continue
                         self._process_new_work_event(
                             work_uid, work_comp, personal_client, state_db
                         )
@@ -1514,6 +1710,12 @@ class CalendarSynchronizer:
                 # Phase 3: Process new personal events (not yet synced)
                 for personal_uid, personal_comp in personal_events.items():
                     if personal_uid not in personal_uids_processed:
+                        # Skip managed events — they are copies we created in personal
+                        # from work events.  Syncing them back to work would produce
+                        # circular duplicates.
+                        if EventSanitizer.is_managed_event(personal_comp):
+                            self.logger.debug(f"Skipping managed personal event: {personal_uid}")
+                            continue
                         self._process_new_personal_event(
                             personal_uid, personal_comp, work_client, state_db
                         )
@@ -1560,8 +1762,8 @@ class CalendarSynchronizer:
 
         if not work_exists:
             # Work event deleted
-            if origin == 'source':  # DB uses 'source' for work origin
-                # Work was authoritative, delete personal
+            if origin == 'source':
+                # Work was authoritative → delete the personal mirror
                 if self.config.dry_run:
                     self.logger.info(
                         f"[DRY RUN] [WORK→PERSONAL] Would DELETE: {personal_uid} (work deleted)"
@@ -1575,16 +1777,29 @@ class CalendarSynchronizer:
                     except (GLib.Error, CalendarSyncError) as e:
                         self.logger.error(f"Failed to delete personal {personal_uid}: {e}")
                         self.stats.errors += 1
-
-            # Clean up state
-            if not self.config.dry_run:
-                state_db.delete_by_pair(work_uid, personal_uid)
+                # Clean up state
+                if not self.config.dry_run:
+                    state_db.delete_by_pair(work_uid, personal_uid)
+            else:
+                # Personal was authoritative → work was deleted externally; recreate it.
+                # (work_uid is already in work_uids_processed after this call returns,
+                # so we must handle recreation here rather than deferring to Phase 2.)
+                if self.config.dry_run:
+                    self.logger.info(
+                        f"[DRY RUN] [PERSONAL→WORK] Would RECREATE: {work_uid} (work manually deleted)"
+                    )
+                    self.stats.added += 1
+                else:
+                    state_db.delete_by_pair(work_uid, personal_uid)
+                    self._process_new_personal_event(
+                        personal_uid, personal_events[personal_uid], work_client, state_db
+                    )
             return
 
         if not personal_exists:
             # Personal event deleted
-            if origin == 'target':  # DB uses 'target' for personal origin
-                # Personal was authoritative, delete work
+            if origin == 'target':
+                # Personal was authoritative → delete the work mirror
                 if self.config.dry_run:
                     self.logger.info(
                         f"[DRY RUN] [PERSONAL→WORK] Would DELETE: {work_uid} (personal deleted)"
@@ -1598,10 +1813,24 @@ class CalendarSynchronizer:
                     except (GLib.Error, CalendarSyncError) as e:
                         self.logger.error(f"Failed to delete work {work_uid}: {e}")
                         self.stats.errors += 1
-
-            # Clean up state
-            if not self.config.dry_run:
-                state_db.delete_by_pair(work_uid, personal_uid)
+                # Clean up state
+                if not self.config.dry_run:
+                    state_db.delete_by_pair(work_uid, personal_uid)
+            else:
+                # Work was authoritative → personal was deleted externally; recreate it.
+                # (personal_uid is already in personal_uids_processed after this call
+                # returns, so we must handle recreation here rather than deferring to
+                # Phase 3.)
+                if self.config.dry_run:
+                    self.logger.info(
+                        f"[DRY RUN] [WORK→PERSONAL] Would RECREATE: {personal_uid} (personal manually deleted)"
+                    )
+                    self.stats.added += 1
+                else:
+                    state_db.delete_by_pair(work_uid, personal_uid)
+                    self._process_new_work_event(
+                        work_uid, work_events[work_uid], personal_client, state_db
+                    )
             return
 
         # Both events exist - check for updates
@@ -1809,7 +2038,12 @@ class CalendarSynchronizer:
         if self.config.clear:
             try:
                 work_client, personal_client = self._setup_clients()
-                with StateDatabase(self.config.state_db_path) as state_db:
+                with StateDatabase(
+                    self.config.state_db_path,
+                    self.config.work_calendar_id,
+                    self.config.personal_calendar_id,
+                ) as state_db:
+                    state_db.migrate_if_needed(self.config.refresh or self.config.clear)
                     self._perform_clear(work_client, personal_client, state_db)
                 return self.stats
             except CalendarSyncError as e:
@@ -1836,7 +2070,13 @@ class CalendarSynchronizer:
             work_client, personal_client = self._setup_clients()
 
             # Open state database
-            with StateDatabase(self.config.state_db_path) as state_db:
+            with StateDatabase(
+                self.config.state_db_path,
+                self.config.work_calendar_id,
+                self.config.personal_calendar_id,
+            ) as state_db:
+                state_db.migrate_if_needed(self.config.refresh or self.config.clear)
+
                 # Handle refresh mode
                 if self.config.refresh:
                     self._perform_refresh(personal_client, state_db)
@@ -1888,6 +2128,14 @@ class CalendarSynchronizer:
                 for obj in work_events:
                     comp = self._parse_component(obj)
                     base_uid = comp.get_uid()
+
+                    # Skip events we created ourselves (managed events in the work
+                    # calendar are "Busy" blocks synced from personal by --only-to-work
+                    # or --both).  Re-syncing them to personal would create circular
+                    # duplicates and trigger a UNIQUE constraint violation.
+                    if EventSanitizer.is_managed_event(comp):
+                        self.logger.debug(f"Skipping managed event: {base_uid}")
+                        continue
 
                     # Skip cancelled events entirely.  They no longer block time
                     # and Exchange rejects creating them via CreateItem.  Their

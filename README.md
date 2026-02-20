@@ -52,12 +52,12 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 sudo dnf install python3-gobject evolution-data-server
 
 # Make scripts executable
-chmod +x eds-calendar-sync.py list-calendars.py
+chmod +x eds-calendar-sync.py debug-calendar.py
 
 # Copy to user bin directory (optional)
 mkdir -p ~/.local/bin
 cp eds-calendar-sync.py ~/.local/bin/
-cp list-calendars.py ~/.local/bin/
+cp debug-calendar.py ~/.local/bin/
 ```
 
 ## Configuration
@@ -65,7 +65,7 @@ cp list-calendars.py ~/.local/bin/
 ### Step 1: Find Your Calendar UIDs
 
 ```bash
-./list-calendars.py
+./debug-calendar.py --list
 ```
 
 This will display all calendars available in EDS with their UIDs. Identify your:
@@ -379,29 +379,40 @@ This SQLite database tracks:
 - Content hashes for both events (separate hashes for sanitized versions)
 - Event origin ('source' for work events, 'target' for personal events)
 - Sync timestamps
+- Calendar pair identity (supports multiple pairs in one DB)
 
 **Schema:**
 ```sql
 CREATE TABLE sync_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_calendar_id TEXT NOT NULL,  -- Work calendar UID (partitions records by pair)
+    personal_calendar_id TEXT NOT NULL, -- Personal calendar UID
     source_uid TEXT NOT NULL,        -- Work event UID (or UID::RID::date for recurring exceptions)
     target_uid TEXT NOT NULL,        -- Personal calendar event UID
     source_hash TEXT NOT NULL,       -- Work event content hash
     target_hash TEXT NOT NULL,       -- Personal event content hash (sanitized)
-    origin TEXT NOT NULL,            -- 'source' or 'target'
+    origin TEXT NOT NULL,            -- 'source' (work-authoritative) or 'target' (personal-authoritative)
     created_at INTEGER NOT NULL,     -- Unix timestamp
     last_sync_at INTEGER NOT NULL,   -- Unix timestamp
-    UNIQUE(source_uid, target_uid)
+    UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
 );
 ```
 
+**Multi-pair support:** A single state DB can safely serve multiple calendar pairs. Records are partitioned by `(work_calendar_id, personal_calendar_id)`, so different pairs never interfere with each other. `--clear` and `--refresh` only affect the current pair's records.
+
+**Safe direction switching:** Switching between `--only-to-personal`, `--only-to-work`, and `--both` for the same calendar pair is safe — all modes use a consistent storage convention and can coexist in the same DB.
+
+**Automatic schema migration:** If you have a state DB from an older version (before multi-pair support), it is automatically migrated on the first run. If the old DB contains `--only-to-work` records, a one-time `--refresh` will be required (the tool will tell you).
+
 **To reset the state** (forces full resync):
 ```bash
+# Preferred: safely removes synced events then resyncs
+./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
+
+# Alternative: delete the DB file entirely (all pairs lose their state)
 rm ~/.local/share/eds-calendar-sync-state.db
 ./eds-calendar-sync.py --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
-
-Or use `--refresh` which safely removes synced events first.
 
 ## Troubleshooting
 
@@ -411,7 +422,7 @@ Or use `--refresh` which safely removes synced events first.
 Error: Calendar with UID 'xxx' not found in EDS
 ```
 
-**Solution**: Run `./list-calendars.py` to verify the UID and ensure the calendar is enabled.
+**Solution**: Run `./debug-calendar.py --list` to verify the UID and ensure the calendar is enabled.
 
 ### Permission Errors
 
@@ -427,7 +438,7 @@ Error: Failed to connect to calendar
 Error: Read-only calendars can't be modified
 ```
 
-**Solution**: Verify that your calendar is not read-only. Check with `./list-calendars.py`. Some calendars (like "Birthdays") are read-only.
+**Solution**: Verify that your calendar is not read-only. Check with `./debug-calendar.py --list`. Some calendars (like "Birthdays") are read-only.
 
 ### Duplicate Categories Error
 

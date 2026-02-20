@@ -16,11 +16,11 @@ Get up and running with EDS Calendar Sync in 5 minutes.
 sudo dnf install python3-gobject evolution-data-server
 
 # Make scripts executable
-chmod +x eds-calendar-sync.py list-calendars.py
+chmod +x eds-calendar-sync.py debug-calendar.py
 
 # Copy to user bin directory (optional)
 mkdir -p ~/.local/bin
-cp eds-calendar-sync.py list-calendars.py ~/.local/bin/
+cp eds-calendar-sync.py debug-calendar.py ~/.local/bin/
 ```
 
 ## Configuration
@@ -28,22 +28,15 @@ cp eds-calendar-sync.py list-calendars.py ~/.local/bin/
 ### 1. Find Your Calendar UIDs
 
 ```bash
-./list-calendars.py
+./debug-calendar.py --list
 ```
 
 Output example:
 ```
-1. Work Calendar
-   UID:     d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
-   Account: Microsoft 365
-   Enabled: Yes
-   Mode:    Read-write
-
-2. Personal
-   UID:     02e0b7e48f4e0dbfb2c91861a8e184a75617e193
-   Account: Google
-   Enabled: Yes
-   Mode:    Read-write
+Display Name          Account                    Mode         UID
+--------------------------------------------------------------------------------------------
+Work Calendar         work.user@company.com      Read-write   d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
+Personal              personal.user@gmail.com    Read-write   02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 ```
 
 ### 2. Create Configuration File
