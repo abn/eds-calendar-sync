@@ -367,6 +367,21 @@ def query_status_all_pairs(db_path: Path) -> list:
         conn.close()
 
 
+def get_all_calendar_ids(db_path: Path) -> list[str]:
+    """Return all distinct calendar UIDs referenced in the state DB (both columns)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            "SELECT DISTINCT work_calendar_id FROM sync_state"
+            " UNION"
+            " SELECT DISTINCT personal_calendar_id FROM sync_state"
+            " ORDER BY 1"
+        )
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def migrate_calendar_id(db_path: Path, old_id: str, new_id: str, dry_run: bool) -> int:
     """
     Replace all occurrences of old_id with new_id in both calendar ID columns.

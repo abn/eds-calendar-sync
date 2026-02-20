@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from eds_calendar_sync.db import get_all_calendar_ids
 from eds_calendar_sync.db import migrate_calendar_id
 from eds_calendar_sync.db import query_status_all_pairs
 from eds_calendar_sync.eds_client import get_calendar_display_info
@@ -333,13 +334,95 @@ def clear(
 
 
 # ---------------------------------------------------------------------------
+# migrate helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_eds_calendars():
+    """
+    Initialise EDS and return (registry, entries).
+    entries: list of (name, account, mode, mode_style, uid)
+    """
+    import gi
+
+    gi.require_version("ECal", "2.0")
+    gi.require_version("EDataServer", "1.2")
+    from gi.repository import ECal
+    from gi.repository import EDataServer
+
+    registry = EDataServer.SourceRegistry.new_sync(None)
+    sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
+    entries = []
+    for source in sources:
+        sname = source.get_display_name() or "(unnamed)"
+        suid = source.get_uid() or ""
+        parent = source.get_parent()
+        account = ""
+        if parent:
+            psrc = registry.ref_source(parent)
+            if psrc:
+                account = psrc.get_display_name() or ""
+        try:
+            client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
+            mode = "Read-write" if not client.is_readonly() else "Read-only"
+            mode_style = "green" if not client.is_readonly() else "yellow"
+        except Exception:
+            mode = "Unknown"
+            mode_style = "red"
+        entries.append((sname, account, mode, mode_style, suid))
+    return registry, entries
+
+
+def _print_picker_table(entries) -> None:
+    """Print a numbered EDS calendar table for interactive selection."""
+    picker = Table(show_header=True, header_style="bold cyan")
+    picker.add_column("#", style="bold", justify="right", width=3)
+    picker.add_column("Display Name / UID", min_width=36, overflow="fold")
+    picker.add_column("Account")
+    picker.add_column("Mode")
+    for i, (sname, account, mode, mode_style, suid) in enumerate(entries, 1):
+        name_cell = Text()
+        name_cell.append(sname, style="bold")
+        name_cell.append("\n")
+        name_cell.append(suid, style="dim")
+        picker.add_row(str(i), name_cell, account, Text(mode, style=mode_style))
+    console.print(picker)
+
+
+def _pick_calendar(entries, allow_skip: bool = False) -> str | None:
+    """
+    Prompt the user to choose a calendar from entries by number.
+    Returns the chosen UID, or None if the user enters 0 and allow_skip is True.
+    """
+    n = len(entries)
+    suffix = " (0 to skip)" if allow_skip else ""
+    choice = typer.prompt(f"Select replacement [1-{n}]{suffix}", type=int)
+    if allow_skip and choice == 0:
+        return None
+    if choice < 1 or choice > n:
+        console.print("[bold red]Error:[/] Invalid selection.")
+        raise typer.Exit(1)
+    return entries[choice - 1][4]
+
+
+_NEXT_STEPS = (
+    "\n[bold]Next steps:[/]\n"
+    "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UID(s)\n"
+    "  2. Run [cyan]eds-calendar-sync sync --dry-run[/] to verify everything works"
+)
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: migrate
 # ---------------------------------------------------------------------------
 
 
 @app.command()
 def migrate(
-    old: Annotated[str, typer.Argument(help="Calendar UID to replace")],
+    old: Annotated[
+        str | None,
+        typer.Argument(help="Calendar UID to replace (audit mode if omitted)"),
+    ] = None,
     new: Annotated[
         str | None,
         typer.Argument(help="Replacement calendar UID (interactive picker if omitted)"),
@@ -348,72 +431,93 @@ def migrate(
 ) -> None:
     """Replace a calendar UID everywhere in the state DB.
 
-    Useful after a GOA reconnection assigns a new EDS UID to a calendar.
-    Replaces OLD with NEW in both the work and personal ID columns so all
-    existing sync records are preserved.
+    [bold]No arguments[/bold]: audits all UIDs in the state DB against EDS,
+    flags any that no longer resolve, and lets you pick a replacement
+    for each missing UID one at a time.
 
-    If NEW is omitted, an interactive list of EDS calendars is shown so
-    you can pick the replacement by number.
+    [bold]OLD only[/bold]: shows an interactive EDS calendar picker for the replacement.
+
+    [bold]OLD NEW[/bold]: replaces immediately without prompting.
+
+    Useful after a GOA reconnection assigns a new EDS UID to a calendar.
     """
     state_db_path = state.state_db
     if not state_db_path.exists():
         console.print(f"[bold red]Error:[/] State database not found: {state_db_path}")
         raise typer.Exit(1)
 
+    # ---- Audit mode (no arguments) ----------------------------------------
+    if old is None:
+        all_uids = get_all_calendar_ids(state_db_path)
+        if not all_uids:
+            console.print("[yellow]State database is empty — nothing to audit.[/]")
+            return
+
+        _, eds_entries = _load_eds_calendars()
+        eds_by_uid = {suid: (sname, account) for sname, account, _, _, suid in eds_entries}
+
+        audit = Table(show_header=True, header_style="bold cyan")
+        audit.add_column("UID", min_width=36, overflow="fold")
+        audit.add_column("Name")
+        audit.add_column("Account")
+        audit.add_column("Status")
+
+        missing: list[str] = []
+        for uid in all_uids:
+            if uid in eds_by_uid:
+                sname, account = eds_by_uid[uid]
+                audit.add_row(uid, sname, account, Text("✓ Active", style="green"))
+            else:
+                audit.add_row(
+                    uid,
+                    Text("(not found)", style="dim"),
+                    "",
+                    Text("✗ Missing", style="bold red"),
+                )
+                missing.append(uid)
+
+        console.print(Panel(audit, title="[bold]Calendar UID Audit[/bold]"))
+
+        if not missing:
+            console.print("[green]All calendar UIDs resolve correctly.[/]")
+            return
+
+        console.print(
+            f"\n[bold yellow]{len(missing)} unresolved UID(s)[/bold yellow] — "
+            "select a replacement for each (0 to skip).\n"
+        )
+
+        migrated_any = False
+        for uid in missing:
+            console.rule(f"[dim]{uid}[/dim]")
+            console.print()
+            _print_picker_table(eds_entries)
+            console.print()
+            new_uid = _pick_calendar(eds_entries, allow_skip=True)
+            if new_uid is None:
+                console.print("[dim]Skipped.[/dim]\n")
+                continue
+            rows = migrate_calendar_id(state_db_path, uid, new_uid, dry_run)
+            prefix = "Would update" if dry_run else "Updated"
+            console.print(
+                f"  {prefix} [bold]{rows}[/bold] record(s): "
+                f"[dim]{uid}[/dim] → [cyan]{new_uid}[/cyan]\n"
+            )
+            migrated_any = True
+
+        if migrated_any and not dry_run:
+            console.print(_NEXT_STEPS)
+        return
+
+    # ---- Single UID mode (old given, new optional) ------------------------
     if new is None:
-        import gi
-
-        gi.require_version("ECal", "2.0")
-        gi.require_version("EDataServer", "1.2")
-        from gi.repository import ECal
-        from gi.repository import EDataServer
-
-        registry = EDataServer.SourceRegistry.new_sync(None)
-        sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
-
-        picker = Table(show_header=True, header_style="bold cyan")
-        picker.add_column("#", style="bold", justify="right", width=3)
-        picker.add_column("Display Name / UID", min_width=36, overflow="fold")
-        picker.add_column("Account")
-        picker.add_column("Mode")
-
-        uid_choices: list[str] = []
-        for source in sources:
-            sname = source.get_display_name() or "(unnamed)"
-            suid = source.get_uid() or ""
-            parent = source.get_parent()
-            account = ""
-            if parent:
-                psrc = registry.ref_source(parent)
-                if psrc:
-                    account = psrc.get_display_name() or ""
-            try:
-                client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
-                mode = "Read-write" if not client.is_readonly() else "Read-only"
-                mode_style = "green" if not client.is_readonly() else "yellow"
-            except Exception:
-                mode = "Unknown"
-                mode_style = "red"
-
-            idx = len(uid_choices) + 1
-            name_cell = Text()
-            name_cell.append(sname, style="bold")
-            name_cell.append("\n")
-            name_cell.append(suid, style="dim")
-            picker.add_row(str(idx), name_cell, account, Text(mode, style=mode_style))
-            uid_choices.append(suid)
-
-        if not uid_choices:
+        _, eds_entries = _load_eds_calendars()
+        if not eds_entries:
             console.print("[bold red]Error:[/] No EDS calendars found.")
             raise typer.Exit(1)
-
-        console.print(picker)
+        _print_picker_table(eds_entries)
         console.print()
-        choice = typer.prompt(f"Select replacement calendar [1-{len(uid_choices)}]", type=int)
-        if choice < 1 or choice > len(uid_choices):
-            console.print("[bold red]Error:[/] Invalid selection.")
-            raise typer.Exit(1)
-        new = uid_choices[choice - 1]
+        new = _pick_calendar(eds_entries)
         console.print()
 
     info = Text()
@@ -443,11 +547,7 @@ def migrate(
         console.print("[yellow]Warning:[/] No matching records found — verify the old UID.")
 
     if not dry_run:
-        console.print(
-            "\n[bold]Next steps:[/]\n"
-            "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UID\n"
-            "  2. Run [cyan]eds-calendar-sync sync --dry-run[/] to verify everything works"
-        )
+        console.print(_NEXT_STEPS)
 
 
 # ---------------------------------------------------------------------------
