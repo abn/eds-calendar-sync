@@ -565,6 +565,50 @@ class EventSanitizer:
                         except Exception:
                             pass  # On any error, leave DTSTART unchanged
 
+            # Normalise EXDATE;VALUE=DATE to EXDATE;TZID=<tz>:<datetime>.
+            # Exchange ignores date-only EXDATEs when DTSTART carries a TZID —
+            # the two formats don't match in Exchange's internal comparison so
+            # the excluded occurrences still appear in the calendar.
+            # Re-read DTSTART here to pick up any advancement done above.
+            _cur_dts_prop = event.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
+            if _cur_dts_prop:
+                _tz_norm_p = _cur_dts_prop.get_first_parameter(
+                    ICalGLib.ParameterKind.TZID_PARAMETER
+                )
+                if _tz_norm_p:
+                    _tz_norm  = _tz_norm_p.get_tzid()
+                    _dts_norm = _cur_dts_prop.get_dtstart()
+                    _hms_norm = (
+                        f"T{_dts_norm.get_hour():02d}"
+                        f"{_dts_norm.get_minute():02d}"
+                        f"{_dts_norm.get_second():02d}"
+                    )
+                    _date_exdates: Set[str] = set()
+                    _ed_n = event.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                    while _ed_n:
+                        try:
+                            _ed_t = _ed_n.get_exdate()
+                            if _ed_t and not _ed_t.is_null_time() and _ed_t.is_date():
+                                _date_exdates.add(
+                                    f"{_ed_t.get_year():04d}"
+                                    f"{_ed_t.get_month():02d}"
+                                    f"{_ed_t.get_day():02d}"
+                                )
+                                event.remove_property(_ed_n)
+                                _ed_n = event.get_first_property(
+                                    ICalGLib.PropertyKind.EXDATE_PROPERTY
+                                )
+                                continue
+                        except Exception:
+                            pass
+                        _ed_n = event.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                    for _d in sorted(_date_exdates):
+                        event.add_property(
+                            ICalGLib.Property.new_from_string(
+                                f"EXDATE;TZID={_tz_norm}:{_d}{_hms_norm}"
+                            )
+                        )
+
             # Add metadata to identify this as a managed event
             # Use CATEGORIES property (X-properties and COMMENT are stripped by Microsoft 365)
             # First remove any existing CATEGORIES to avoid duplicates
