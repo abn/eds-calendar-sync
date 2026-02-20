@@ -16,7 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from eds_calendar_sync.db import migrate_calendar_ids_in_db
+from eds_calendar_sync.db import migrate_calendar_id
 from eds_calendar_sync.db import query_status_all_pairs
 from eds_calendar_sync.eds_client import get_calendar_display_info
 from eds_calendar_sync.models import DEFAULT_CONFIG
@@ -339,80 +339,51 @@ def clear(
 
 @app.command()
 def migrate(
-    old_work: Annotated[str | None, typer.Option(help="Old work calendar UID")] = None,
-    new_work: Annotated[str | None, typer.Option(help="New work calendar UID")] = None,
-    old_personal: Annotated[str | None, typer.Option(help="Old personal calendar UID")] = None,
-    new_personal: Annotated[str | None, typer.Option(help="New personal calendar UID")] = None,
+    old: Annotated[str, typer.Argument(help="Calendar UID to replace")],
+    new: Annotated[str, typer.Argument(help="Replacement calendar UID")],
     dry_run: _DRY_RUN = False,
 ) -> None:
-    """Update calendar IDs in state DB after GOA reconnection."""
-    work_pair = (old_work, new_work)
-    pers_pair = (old_personal, new_personal)
+    """Replace a calendar UID everywhere in the state DB.
 
-    if not (all(work_pair) or all(pers_pair)):
-        console.print(
-            "[bold red]Error:[/] At least one fully specified pair is required:\n"
-            "  [cyan]--old-work[/] UID [cyan]--new-work[/] UID, and/or\n"
-            "  [cyan]--old-personal[/] UID [cyan]--new-personal[/] UID"
-        )
-        raise typer.Exit(1)
-
-    for label, pair in [("work", work_pair), ("personal", pers_pair)]:
-        if any(pair) and not all(pair):
-            console.print(
-                f"[bold red]Error:[/] Both [cyan]--old-{label}[/] and "
-                f"[cyan]--new-{label}[/] must be given together."
-            )
-            raise typer.Exit(1)
-
+    Useful after a GOA reconnection assigns a new EDS UID to a calendar.
+    Replaces OLD with NEW in both the work and personal ID columns so all
+    existing sync records are preserved.
+    """
     state_db_path = state.state_db
     if not state_db_path.exists():
         console.print(f"[bold red]Error:[/] State database not found: {state_db_path}")
         raise typer.Exit(1)
 
-    # Info panel
     info = Text()
     info.append("  State DB:  ", style="bold")
     info.append(f"{state_db_path}\n")
-    if all(work_pair):
-        info.append("  Work:      ", style="bold")
-        info.append(f"{work_pair[0]} → {work_pair[1]}\n")
-    if all(pers_pair):
-        info.append("  Personal:  ", style="bold")
-        info.append(f"{pers_pair[0]} → {pers_pair[1]}\n")
+    info.append("  Old UID:   ", style="bold")
+    info.append(f"{old}\n")
+    info.append("  New UID:   ", style="bold")
+    info.append(f"{new}\n")
     if dry_run:
         info.append("  Mode:      ", style="bold")
         info.append("DRY RUN", style="bold magenta")
 
     console.print(Panel(info, title="[bold]Calendar ID Migration[/bold]"))
 
-    work_rows, pers_rows = migrate_calendar_ids_in_db(
-        state_db_path,
-        old_work,
-        new_work,
-        old_personal,
-        new_personal,
-        dry_run,
-    )
+    rows = migrate_calendar_id(state_db_path, old, new, dry_run)
 
-    prefix = "[DRY RUN] Would update" if dry_run else "Updated"
+    prefix = "Would update" if dry_run else "Updated"
     results = Table.grid(padding=(0, 2))
     results.add_column(style="bold")
     results.add_column(justify="right")
-    if all(work_pair):
-        results.add_row("Work records", f"{prefix} {work_rows}")
-    if all(pers_pair):
-        results.add_row("Personal records", f"{prefix} {pers_rows}")
+    results.add_row("Records matched", f"{prefix} {rows}")
 
     console.print(Panel(results, title="[bold]Results[/bold]", expand=False))
 
-    if work_rows == 0 and pers_rows == 0:
-        console.print("[yellow]Warning:[/] No matching records found — verify the old UIDs.")
+    if rows == 0:
+        console.print("[yellow]Warning:[/] No matching records found — verify the old UID.")
 
     if not dry_run:
         console.print(
             "\n[bold]Next steps:[/]\n"
-            "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UIDs\n"
+            "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UID\n"
             "  2. Run [cyan]eds-calendar-sync sync --dry-run[/] to verify everything works"
         )
 

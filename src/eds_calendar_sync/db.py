@@ -367,47 +367,34 @@ def query_status_all_pairs(db_path: Path) -> list:
         conn.close()
 
 
-def migrate_calendar_ids_in_db(
-    db_path: Path,
-    old_work_id,
-    new_work_id,
-    old_personal_id,
-    new_personal_id,
-    dry_run: bool,
-) -> tuple:
+def migrate_calendar_id(db_path: Path, old_id: str, new_id: str, dry_run: bool) -> int:
     """
-    Replace calendar IDs in all state records.
+    Replace all occurrences of old_id with new_id in both calendar ID columns.
 
     Used after a GOA reconnection changes EDS calendar UIDs. Operates directly on the
     raw schema without the pair-scoped StateDatabase machinery.
 
-    Returns (work_rows_changed, personal_rows_changed).
+    Returns the number of rows that were (or would be) updated.
     """
     conn = sqlite3.connect(db_path)
-    work_rows = personal_rows = 0
+    rows = 0
     try:
-        if old_work_id and new_work_id:
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM sync_state WHERE work_calendar_id = ?", (old_work_id,)
-            )
-            work_rows = cur.fetchone()[0]
-            if not dry_run:
-                conn.execute(
-                    "UPDATE sync_state SET work_calendar_id = ? WHERE work_calendar_id = ?",
-                    (new_work_id, old_work_id),
-                )
-        if old_personal_id and new_personal_id:
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM sync_state WHERE personal_calendar_id = ?", (old_personal_id,)
-            )
-            personal_rows = cur.fetchone()[0]
-            if not dry_run:
-                conn.execute(
-                    "UPDATE sync_state SET personal_calendar_id = ? WHERE personal_calendar_id = ?",
-                    (new_personal_id, old_personal_id),
-                )
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM sync_state"
+            " WHERE work_calendar_id = ? OR personal_calendar_id = ?",
+            (old_id, old_id),
+        )
+        rows = cur.fetchone()[0]
         if not dry_run:
+            conn.execute(
+                "UPDATE sync_state SET work_calendar_id = ? WHERE work_calendar_id = ?",
+                (new_id, old_id),
+            )
+            conn.execute(
+                "UPDATE sync_state SET personal_calendar_id = ? WHERE personal_calendar_id = ?",
+                (new_id, old_id),
+            )
             conn.commit()
     finally:
         conn.close()
-    return work_rows, personal_rows
+    return rows
