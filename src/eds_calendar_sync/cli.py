@@ -18,7 +18,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .models import DEFAULT_STATE_DB, DEFAULT_CONFIG, SyncConfig, CalendarSyncError
-from .db import migrate_calendar_ids_in_db
+from .db import migrate_calendar_ids_in_db, query_status_all_pairs
 from .eds_client import get_calendar_display_info
 from .sync import CalendarSynchronizer
 
@@ -364,6 +364,117 @@ def migrate(
             "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UIDs\n"
             "  2. Run [cyan]eds-calendar-sync sync --dry-run[/] to verify everything works"
         )
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: status
+# ---------------------------------------------------------------------------
+
+@app.command()
+def status() -> None:
+    """Show sync configuration and state database summary."""
+    import sqlite3
+    from datetime import datetime
+
+    # -- Configuration section -----------------------------------------------
+    config_exists = state.config_path.exists()
+    db_exists = state.state_db.exists()
+
+    cfg_info = Text()
+    cfg_info.append("  Config:   ", style="bold")
+    cfg_info.append(str(state.config_path) + " ")
+    cfg_info.append("✓" if config_exists else "(not found)",
+                    style="green" if config_exists else "red")
+    cfg_info.append("\n  State DB: ", style="bold")
+    cfg_info.append(str(state.state_db) + " ")
+    cfg_info.append("✓" if db_exists else "(not found)",
+                    style="green" if db_exists else "yellow")
+
+    # Try to resolve the configured calendar pair's display names via EDS.
+    config_file = _load_config_file(state.config_path)
+    work_id = config_file.get("work_calendar_id")
+    personal_id = config_file.get("personal_calendar_id")
+
+    if work_id or personal_id:
+        cfg_info.append("\n")
+
+    if work_id:
+        try:
+            work_name, work_account, _ = get_calendar_display_info(work_id)
+            work_display = work_name + (f" ({work_account})" if work_account else "")
+        except Exception:
+            work_display = work_id
+        cfg_info.append("\n  Work:     ", style="bold")
+        cfg_info.append(work_display + "\n")
+        cfg_info.append(f"            {work_id}", style="dim")
+
+    if personal_id:
+        try:
+            pers_name, pers_account, _ = get_calendar_display_info(personal_id)
+            pers_display = pers_name + (f" ({pers_account})" if pers_account else "")
+        except Exception:
+            pers_display = personal_id
+        cfg_info.append("\n  Personal: ", style="bold")
+        cfg_info.append(pers_display + "\n")
+        cfg_info.append(f"            {personal_id}", style="dim")
+
+    console.print(Panel(cfg_info, title="[bold]EDS Calendar Sync — Status[/bold]"))
+
+    # -- State DB section ----------------------------------------------------
+    rows = query_status_all_pairs(state.state_db)
+
+    if not rows:
+        if not db_exists:
+            console.print("[yellow]No state database yet — run[/] [cyan]eds-calendar-sync sync[/] [yellow]to create it.[/]")
+        else:
+            console.print("[yellow]State database is empty — no syncs recorded yet.[/]")
+        return
+
+    # Group rows by (work_calendar_id, personal_calendar_id) pair
+    from itertools import groupby
+    pairs = {}
+    for row in rows:
+        key = (row["work_calendar_id"], row["personal_calendar_id"])
+        pairs.setdefault(key, []).append(row)
+
+    for (w_id, p_id), pair_rows in pairs.items():
+        # Resolve display names (best-effort; fall back to short UID on failure)
+        def _short(uid: str) -> str:
+            return uid[:16] + "…" if len(uid) > 16 else uid
+
+        try:
+            w_name, w_acct, _ = get_calendar_display_info(w_id)
+            w_label = w_name + (f" ({w_acct})" if w_acct else "")
+        except Exception:
+            w_label = _short(w_id)
+
+        try:
+            p_name, p_acct, _ = get_calendar_display_info(p_id)
+            p_label = p_name + (f" ({p_acct})" if p_acct else "")
+        except Exception:
+            p_label = _short(p_id)
+
+        is_configured_pair = (w_id == work_id and p_id == personal_id)
+        pair_title = f"[bold]{w_label}[/bold] ↔ [bold]{p_label}[/bold]"
+        if is_configured_pair:
+            pair_title += "  [green](configured)[/green]"
+
+        table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+        table.add_column("Direction")
+        table.add_column("Tracked", justify="right")
+        table.add_column("Last sync")
+
+        overall_last_sync = 0
+        for row in pair_rows:
+            direction = "Work → Personal" if row["origin"] == "source" else "Personal → Work"
+            ts = row["last_sync_at"] or 0
+            overall_last_sync = max(overall_last_sync, ts)
+            last_sync_str = (
+                datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S") if ts else "—"
+            )
+            table.add_row(direction, str(row["count"]), last_sync_str)
+
+        console.print(Panel(table, title=pair_title, expand=False))
 
 
 # ---------------------------------------------------------------------------

@@ -317,6 +317,38 @@ class StateDatabase:
             self.conn = None
 
 
+def query_status_all_pairs(db_path: Path) -> list:
+    """
+    Return aggregate rows for every calendar pair recorded in the database.
+
+    Each row exposes: work_calendar_id, personal_calendar_id, origin, count, last_sync_at.
+    Returns an empty list when the DB file does not exist, has no sync_state table yet,
+    or is still on the old single-pair schema (no work_calendar_id column).
+    """
+    if not db_path.exists():
+        return []
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        columns = {row['name'] for row in conn.execute("PRAGMA table_info(sync_state)")}
+        if 'work_calendar_id' not in columns:
+            return []
+        cursor = conn.execute("""
+            SELECT
+                work_calendar_id,
+                personal_calendar_id,
+                origin,
+                COUNT(*)          AS count,
+                MAX(last_sync_at) AS last_sync_at
+            FROM sync_state
+            GROUP BY work_calendar_id, personal_calendar_id, origin
+            ORDER BY work_calendar_id, personal_calendar_id, origin
+        """)
+        return cursor.fetchall()
+    finally:
+        conn.close()
+
+
 def migrate_calendar_ids_in_db(
     db_path: Path,
     old_work_id,
