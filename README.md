@@ -201,6 +201,7 @@ Commands:
   refresh     Remove synced events then re-sync
   clear       Remove all synced events without re-syncing
   migrate     Update calendar IDs in state DB after GOA reconnection
+  status      Show sync configuration and state database summary
   calendars   List all configured EDS calendars
   inspect     Inspect / debug events in a calendar
 
@@ -258,7 +259,14 @@ systemctl --user status eds-calendar-sync.timer
 systemctl --user list-timers
 ```
 
-### 3. Monitor Sync Logs
+### 3. Check Sync Status
+
+```bash
+# Quick summary: configured calendars, tracked event counts, last sync time
+eds-calendar-sync status
+```
+
+### 4. Monitor Sync Logs
 
 ```bash
 # View recent logs
@@ -271,14 +279,14 @@ journalctl --user -u eds-calendar-sync.service -f
 systemctl --user status eds-calendar-sync.service
 ```
 
-### 4. Manual Trigger
+### 5. Manual Trigger
 
 ```bash
 # Manually trigger a sync without waiting for timer
 systemctl --user start eds-calendar-sync.service
 ```
 
-### 5. Disable Timer
+### 6. Disable Timer
 
 ```bash
 # Stop and disable the timer

@@ -203,7 +203,22 @@ Respects direction:
 Removes all managed events we created (identified via CATEGORIES scan) and clears the state DB.
 Does **not** resync afterward. Respects direction flags to limit which calendar is cleared.
 
-### 6.5 Confirmation Prompt
+### 6.5 Status (`status` subcommand)
+
+Read-only. Renders two sections without touching EDS event data:
+
+1. **Configuration panel** — config file path and state DB path with existence indicators;
+   configured calendar UIDs resolved to display names via EDS (best-effort; falls back to
+   truncated UID if EDS is unavailable or the source is not found).
+2. **Per-pair state panels** — one panel per `(work_calendar_id, personal_calendar_id)` pair
+   found in the DB. Each panel shows a table with direction (`Work → Personal` /
+   `Personal → Work`), tracked event count, and last-sync timestamp. The currently configured
+   pair (from the config file) is labelled `(configured)`.
+
+Uses `query_status_all_pairs()` in `db.py` — a raw `sqlite3` query that does not instantiate
+`StateDatabase` and does not require knowing the calendar pair in advance.
+
+### 6.6 Confirmation Prompt
 
 By default, the tool displays sync configuration and prompts `Proceed with sync? [y/N]` before
 making changes. This is skipped automatically when:
@@ -234,6 +249,7 @@ eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND [OPTIONS
 | `refresh` | Remove synced events then re-sync |
 | `clear` | Remove all synced events without re-syncing |
 | `migrate` | Update calendar IDs in state DB after GOA reconnection |
+| `status` | Show config, resolved calendar names, and per-pair DB summary |
 | `calendars` | List all configured EDS calendars |
 | `inspect UID` | Inspect / debug events in a calendar |
 

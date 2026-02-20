@@ -91,17 +91,22 @@ systemctl --user list-timers eds-calendar-sync.timer
 
 ## Verify It's Working
 
-1. **Check your Personal calendar** (in GNOME Calendar or Google Calendar web):
+1. **Check sync status** — shows configured calendars, tracked event counts, and last sync time:
+   ```bash
+   eds-calendar-sync status
+   ```
+
+2. **Check your Personal calendar** (in GNOME Calendar or Google Calendar web):
    - You should see busy blocks from your Work calendar
    - Titles are preserved
    - Details, locations, and attendees are stripped
 
-2. **View logs**:
+3. **View logs**:
    ```bash
    journalctl --user -u eds-calendar-sync.service -f
    ```
 
-3. **Check next run time**:
+4. **Check next run time**:
    ```bash
    systemctl --user list-timers eds-calendar-sync.timer
    ```
@@ -121,6 +126,9 @@ gnome-calendar
 ### Sync fails
 
 ```bash
+# Check overall status first
+eds-calendar-sync status
+
 # Run with verbose logging
 eds-calendar-sync --verbose sync --dry-run
 
