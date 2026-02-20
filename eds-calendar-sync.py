@@ -422,6 +422,52 @@ class StateDatabase:
             self.conn = None
 
 
+def migrate_calendar_ids_in_db(
+    db_path: Path,
+    old_work_id: Optional[str],
+    new_work_id: Optional[str],
+    old_personal_id: Optional[str],
+    new_personal_id: Optional[str],
+    dry_run: bool,
+) -> tuple:
+    """
+    Replace calendar IDs in all state records.
+
+    Used after a GOA reconnection changes EDS calendar UIDs. Operates directly on the
+    raw schema without the pair-scoped StateDatabase machinery.
+
+    Returns (work_rows_changed, personal_rows_changed).
+    """
+    conn = sqlite3.connect(db_path)
+    work_rows = personal_rows = 0
+    try:
+        if old_work_id and new_work_id:
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM sync_state WHERE work_calendar_id = ?", (old_work_id,)
+            )
+            work_rows = cur.fetchone()[0]
+            if not dry_run:
+                conn.execute(
+                    "UPDATE sync_state SET work_calendar_id = ? WHERE work_calendar_id = ?",
+                    (new_work_id, old_work_id),
+                )
+        if old_personal_id and new_personal_id:
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM sync_state WHERE personal_calendar_id = ?", (old_personal_id,)
+            )
+            personal_rows = cur.fetchone()[0]
+            if not dry_run:
+                conn.execute(
+                    "UPDATE sync_state SET personal_calendar_id = ? WHERE personal_calendar_id = ?",
+                    (new_personal_id, old_personal_id),
+                )
+        if not dry_run:
+            conn.commit()
+    finally:
+        conn.close()
+    return work_rows, personal_rows
+
+
 class EDSCalendarClient:
     """Wrapper for Evolution Data Server calendar operations."""
 
@@ -2299,6 +2345,12 @@ Examples:
 
   # Use configuration file
   %(prog)s --config ~/.config/eds-calendar-sync.conf
+
+  # After GOA reconnection: update calendar IDs in state DB
+  %(prog)s --migrate-calendar-ids \\
+      --old-work-calendar OLD_UID --new-work-calendar NEW_UID \\
+      [--old-personal-calendar OLD_UID --new-personal-calendar NEW_UID] \\
+      [--dry-run]
         """
     )
 
@@ -2369,6 +2421,32 @@ Examples:
         help='Enable verbose debug output'
     )
 
+    parser.add_argument(
+        '--migrate-calendar-ids',
+        action='store_true',
+        help='Update calendar IDs in the state DB after GOA reconnection changed UIDs'
+    )
+    parser.add_argument(
+        '--old-work-calendar',
+        metavar='UID',
+        help='Old work calendar UID to replace (use with --migrate-calendar-ids)'
+    )
+    parser.add_argument(
+        '--new-work-calendar',
+        metavar='UID',
+        help='New work calendar UID (use with --migrate-calendar-ids)'
+    )
+    parser.add_argument(
+        '--old-personal-calendar',
+        metavar='UID',
+        help='Old personal calendar UID to replace (use with --migrate-calendar-ids)'
+    )
+    parser.add_argument(
+        '--new-personal-calendar',
+        metavar='UID',
+        help='New personal calendar UID (use with --migrate-calendar-ids)'
+    )
+
     return parser.parse_args()
 
 
@@ -2378,6 +2456,65 @@ def main():
     setup_logging(args.verbose)
 
     logger = logging.getLogger(__name__)
+
+    # Handle --migrate-calendar-ids before normal sync setup (no EDS connection needed)
+    if args.migrate_calendar_ids:
+        work_pair = (args.old_work_calendar, args.new_work_calendar)
+        pers_pair = (args.old_personal_calendar, args.new_personal_calendar)
+
+        # Validate: at least one fully specified pair
+        if not (all(work_pair) or all(pers_pair)):
+            logger.error(
+                "--migrate-calendar-ids requires at least one fully specified pair:\n"
+                "  --old-work-calendar UID --new-work-calendar UID, and/or\n"
+                "  --old-personal-calendar UID --new-personal-calendar UID"
+            )
+            sys.exit(1)
+        # Validate: no half-specified pair
+        for label, pair in [('work', work_pair), ('personal', pers_pair)]:
+            if any(pair) and not all(pair):
+                logger.error(
+                    f"Both --old-{label}-calendar and --new-{label}-calendar must be given together"
+                )
+                sys.exit(1)
+
+        state_db_path = args.state_db
+        logger.info("=" * 60)
+        logger.info("Calendar ID Migration")
+        logger.info("=" * 60)
+        logger.info(f"State Database: {state_db_path}")
+        if all(work_pair):
+            logger.info(f"Work calendar:  {work_pair[0]} -> {work_pair[1]}")
+        if all(pers_pair):
+            logger.info(f"Personal:       {pers_pair[0]} -> {pers_pair[1]}")
+        logger.info(f"Mode:           {'DRY RUN' if args.dry_run else 'LIVE'}")
+        logger.info("=" * 60)
+
+        if not state_db_path.exists():
+            logger.error(f"State database not found: {state_db_path}")
+            sys.exit(1)
+
+        work_rows, pers_rows = migrate_calendar_ids_in_db(
+            state_db_path,
+            args.old_work_calendar, args.new_work_calendar,
+            args.old_personal_calendar, args.new_personal_calendar,
+            args.dry_run,
+        )
+
+        prefix = "[DRY RUN] Would update" if args.dry_run else "Updated"
+        if all(work_pair):
+            logger.info(f"{prefix} {work_rows} record(s) for work_calendar_id")
+        if all(pers_pair):
+            logger.info(f"{prefix} {pers_rows} record(s) for personal_calendar_id")
+        if work_rows == 0 and pers_rows == 0:
+            logger.warning("No matching records found — verify the old UIDs are correct")
+
+        if not args.dry_run:
+            logger.info("")
+            logger.info("Next steps:")
+            logger.info("  1. Update ~/.config/eds-calendar-sync.conf with the new UIDs")
+            logger.info("  2. Run a normal sync to verify everything is working")
+        sys.exit(0)
 
     # Load config file if it exists
     config_file = load_config_file(args.config)

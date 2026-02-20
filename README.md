@@ -223,6 +223,13 @@ Modes:
 Options:
 --yes, -y                     Auto-confirm without prompting (required for automation)
 --verbose, -v                 Enable verbose debug output
+
+Calendar ID migration (after GOA reconnection):
+--migrate-calendar-ids        Update calendar IDs in state DB (no EDS connection needed)
+--old-work-calendar UID       Old work calendar UID to replace
+--new-work-calendar UID       New work calendar UID
+--old-personal-calendar UID   Old personal calendar UID to replace
+--new-personal-calendar UID   New personal calendar UID
 ```
 
 ## Systemd Timer Setup
@@ -494,6 +501,36 @@ These are Exchange-specific rejections. Common causes and what the tool does aut
 | `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, empty RRULE+EXDATE series, or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped |
 
 If errors persist, run with `--verbose` — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
+
+### Calendar UIDs Changed After GOA Reconnection
+
+When a GNOME Online Accounts connection is removed and re-added, EDS may assign new UIDs to the
+calendar sources. Use `--migrate-calendar-ids` to update the state database without losing sync
+history or triggering a full resync.
+
+```bash
+# Step 1: Find the new UIDs
+./debug-calendar.py --list
+
+# Step 2: Preview the migration (dry run)
+./eds-calendar-sync.py --migrate-calendar-ids --dry-run \
+    --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
+    --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
+
+# Step 3: Apply the migration
+./eds-calendar-sync.py --migrate-calendar-ids \
+    --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
+    --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
+
+# Step 4: Update your config file with the new UIDs
+nano ~/.config/eds-calendar-sync.conf
+
+# Step 5: Run a normal sync
+./eds-calendar-sync.py --dry-run
+./eds-calendar-sync.py --yes
+```
+
+You can omit either side if only that calendar's UID changed.
 
 ### Verbose Debugging
 
