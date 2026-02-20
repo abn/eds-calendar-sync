@@ -4,352 +4,471 @@ Command-line interface for EDS Calendar Sync.
 
 import sys
 import logging
-import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
 from configparser import ConfigParser
-from typing import Dict
+from typing import Dict, Optional
+from typing_extensions import Annotated
+
+import typer
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from .models import DEFAULT_STATE_DB, DEFAULT_CONFIG, SyncConfig, CalendarSyncError
 from .db import migrate_calendar_ids_in_db
 from .eds_client import get_calendar_display_info
 from .sync import CalendarSynchronizer
 
+# ---------------------------------------------------------------------------
+# Typer app
+# ---------------------------------------------------------------------------
 
-def load_config_file(config_path: Path) -> Dict[str, str]:
-    """Load configuration from INI file."""
+app = typer.Typer(
+    no_args_is_help=True,
+    rich_markup_mode="rich",
+    help="Bidirectional calendar sync between work and personal calendars via EDS.",
+)
+
+console = Console()
+
+
+# ---------------------------------------------------------------------------
+# Global state shared across subcommands
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _State:
+    config_path: Path = field(default_factory=lambda: DEFAULT_CONFIG)
+    state_db: Path = field(default_factory=lambda: DEFAULT_STATE_DB)
+    verbose: bool = False
+
+
+state = _State()
+
+
+@app.callback()
+def _global(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help=f"Config file path (default: {DEFAULT_CONFIG})"),
+    ] = DEFAULT_CONFIG,
+    state_db: Annotated[
+        Path,
+        typer.Option("--state-db", help=f"State DB path (default: {DEFAULT_STATE_DB})"),
+    ] = DEFAULT_STATE_DB,
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable verbose debug output"),
+    ] = False,
+) -> None:
+    state.config_path = config
+    state.state_db = state_db
+    state.verbose = verbose
+    _setup_logging(verbose)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(message)s",
+        datefmt="[%X]",
+        handlers=[RichHandler(rich_tracebacks=True, show_path=False, console=console)],
+    )
+
+
+def _load_config_file(config_path: Path) -> Dict[str, str]:
     if not config_path.exists():
         return {}
-
     parser = ConfigParser()
     parser.read(config_path)
-
-    if 'calendar-sync' not in parser:
+    if "calendar-sync" not in parser:
         return {}
-
-    return dict(parser['calendar-sync'])
-
-
-def setup_logging(verbose: bool):
-    """Configure logging output."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(levelname)s: %(message)s'
-    )
+    return dict(parser["calendar-sync"])
 
 
-def parse_arguments() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(
-        description='Calendar synchronization via Evolution Data Server (bidirectional by default)',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Bidirectional sync (default)
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789
+def _build_config(
+    work_calendar: Optional[str],
+    personal_calendar: Optional[str],
+    to_personal: bool,
+    to_work: bool,
+    dry_run: bool,
+    refresh: bool,
+    clear: bool,
+    yes: bool,
+) -> SyncConfig:
+    if to_personal and to_work:
+        raise typer.BadParameter("--to-personal and --to-work are mutually exclusive")
 
-  # One-way sync: work → personal only
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789 --only-to-personal
-
-  # One-way sync: personal → work only
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789 --only-to-work
-
-  # Dry run to see what would happen
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789 --dry-run
-
-  # Refresh: remove synced events and resync
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789 --refresh
-
-  # Clear: remove all synced events
-  %(prog)s --work-calendar abc123 --personal-calendar xyz789 --clear
-
-  # Use configuration file
-  %(prog)s --config ~/.config/eds-calendar-sync.conf
-
-  # After GOA reconnection: update calendar IDs in state DB
-  %(prog)s --migrate-calendar-ids \\
-      --old-work-calendar OLD_UID --new-work-calendar NEW_UID \\
-      [--old-personal-calendar OLD_UID --new-personal-calendar NEW_UID] \\
-      [--dry-run]
-        """
-    )
-
-    parser.add_argument(
-        '--work-calendar',
-        help='EDS calendar UID for work calendar'
-    )
-
-    parser.add_argument(
-        '--personal-calendar',
-        help='EDS calendar UID for personal calendar'
-    )
-
-    parser.add_argument(
-        '--config',
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help=f'Configuration file path (default: {DEFAULT_CONFIG})'
-    )
-
-    parser.add_argument(
-        '--state-db',
-        type=Path,
-        default=DEFAULT_STATE_DB,
-        help=f'State database path (default: {DEFAULT_STATE_DB})'
-    )
-
-    parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Show what would be done without making changes'
-    )
-
-    parser.add_argument(
-        '--refresh',
-        action='store_true',
-        help='Remove only synced events we created and resync (preserves other events)'
-    )
-
-    # Direction flags (mutually exclusive)
-    direction_group = parser.add_mutually_exclusive_group()
-    direction_group.add_argument(
-        '--only-to-personal',
-        action='store_true',
-        help='One-way sync: work → personal only (default is bidirectional)'
-    )
-    direction_group.add_argument(
-        '--only-to-work',
-        action='store_true',
-        help='One-way sync: personal → work only (default is bidirectional)'
-    )
-
-    parser.add_argument(
-        '--clear',
-        action='store_true',
-        help='Remove all synced events created by this tool (uses metadata to identify)'
-    )
-
-    parser.add_argument(
-        '--yes', '-y',
-        action='store_true',
-        help='Automatically confirm sync without prompting (always on for --dry-run)'
-    )
-
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Enable verbose debug output'
-    )
-
-    parser.add_argument(
-        '--migrate-calendar-ids',
-        action='store_true',
-        help='Update calendar IDs in the state DB after GOA reconnection changed UIDs'
-    )
-    parser.add_argument(
-        '--old-work-calendar',
-        metavar='UID',
-        help='Old work calendar UID to replace (use with --migrate-calendar-ids)'
-    )
-    parser.add_argument(
-        '--new-work-calendar',
-        metavar='UID',
-        help='New work calendar UID (use with --migrate-calendar-ids)'
-    )
-    parser.add_argument(
-        '--old-personal-calendar',
-        metavar='UID',
-        help='Old personal calendar UID to replace (use with --migrate-calendar-ids)'
-    )
-    parser.add_argument(
-        '--new-personal-calendar',
-        metavar='UID',
-        help='New personal calendar UID (use with --migrate-calendar-ids)'
-    )
-
-    return parser.parse_args()
-
-
-def main():
-    """Main entry point."""
-    args = parse_arguments()
-    setup_logging(args.verbose)
-
-    logger = logging.getLogger(__name__)
-
-    # Handle --migrate-calendar-ids before normal sync setup (no EDS connection needed)
-    if args.migrate_calendar_ids:
-        work_pair = (args.old_work_calendar, args.new_work_calendar)
-        pers_pair = (args.old_personal_calendar, args.new_personal_calendar)
-
-        # Validate: at least one fully specified pair
-        if not (all(work_pair) or all(pers_pair)):
-            logger.error(
-                "--migrate-calendar-ids requires at least one fully specified pair:\n"
-                "  --old-work-calendar UID --new-work-calendar UID, and/or\n"
-                "  --old-personal-calendar UID --new-personal-calendar UID"
-            )
-            sys.exit(1)
-        # Validate: no half-specified pair
-        for label, pair in [('work', work_pair), ('personal', pers_pair)]:
-            if any(pair) and not all(pair):
-                logger.error(
-                    f"Both --old-{label}-calendar and --new-{label}-calendar "
-                    f"must be given together"
-                )
-                sys.exit(1)
-
-        state_db_path = args.state_db
-        logger.info("=" * 60)
-        logger.info("Calendar ID Migration")
-        logger.info("=" * 60)
-        logger.info(f"State Database: {state_db_path}")
-        if all(work_pair):
-            logger.info(f"Work calendar:  {work_pair[0]} -> {work_pair[1]}")
-        if all(pers_pair):
-            logger.info(f"Personal:       {pers_pair[0]} -> {pers_pair[1]}")
-        logger.info(f"Mode:           {'DRY RUN' if args.dry_run else 'LIVE'}")
-        logger.info("=" * 60)
-
-        if not state_db_path.exists():
-            logger.error(f"State database not found: {state_db_path}")
-            sys.exit(1)
-
-        work_rows, pers_rows = migrate_calendar_ids_in_db(
-            state_db_path,
-            args.old_work_calendar, args.new_work_calendar,
-            args.old_personal_calendar, args.new_personal_calendar,
-            args.dry_run,
-        )
-
-        prefix = "[DRY RUN] Would update" if args.dry_run else "Updated"
-        if all(work_pair):
-            logger.info(f"{prefix} {work_rows} record(s) for work_calendar_id")
-        if all(pers_pair):
-            logger.info(f"{prefix} {pers_rows} record(s) for personal_calendar_id")
-        if work_rows == 0 and pers_rows == 0:
-            logger.warning("No matching records found — verify the old UIDs are correct")
-
-        if not args.dry_run:
-            logger.info("")
-            logger.info("Next steps:")
-            logger.info("  1. Update ~/.config/eds-calendar-sync.conf with the new UIDs")
-            logger.info("  2. Run a normal sync to verify everything is working")
-        sys.exit(0)
-
-    # Load config file if it exists
-    config_file = load_config_file(args.config)
-
-    # Determine work and personal calendar IDs (CLI args override config file)
-    work_id = args.work_calendar or config_file.get('work_calendar_id')
-    personal_id = args.personal_calendar or config_file.get('personal_calendar_id')
+    config_file = _load_config_file(state.config_path)
+    work_id = work_calendar or config_file.get("work_calendar_id")
+    personal_id = personal_calendar or config_file.get("personal_calendar_id")
 
     if not work_id or not personal_id:
-        logger.error(
-            "Work and personal calendar IDs must be provided via "
-            "--work-calendar/--personal-calendar or in configuration file"
+        console.print(
+            "[bold red]Error:[/] Work and personal calendar IDs must be provided via "
+            "[cyan]--work-calendar[/]/[cyan]--personal-calendar[/] or in the config file."
         )
-        sys.exit(1)
+        raise typer.Exit(1)
 
-    # Determine sync direction
-    if args.only_to_personal:
-        sync_direction = 'to-personal'
-    elif args.only_to_work:
-        sync_direction = 'to-work'
+    if to_personal:
+        direction = "to-personal"
+    elif to_work:
+        direction = "to-work"
     else:
-        sync_direction = 'both'  # Default is bidirectional
+        direction = "both"
 
-    # Build configuration
-    config = SyncConfig(
+    return SyncConfig(
         work_calendar_id=work_id,
         personal_calendar_id=personal_id,
-        state_db_path=args.state_db,
-        dry_run=args.dry_run,
-        refresh=args.refresh,
-        verbose=args.verbose,
-        sync_direction=sync_direction,
-        clear=args.clear,
-        yes=args.yes
+        state_db_path=state.state_db,
+        dry_run=dry_run,
+        refresh=refresh,
+        verbose=state.verbose,
+        sync_direction=direction,
+        clear=clear,
+        yes=yes,
     )
 
-    # Get calendar display information
-    work_name, work_account, work_uid = get_calendar_display_info(config.work_calendar_id)
+
+def _run_sync(cfg: SyncConfig) -> None:
+    """Core sync runner: display panel, confirm, run, show results."""
+    work_name, work_account, work_uid = get_calendar_display_info(cfg.work_calendar_id)
     personal_name, personal_account, personal_uid = get_calendar_display_info(
-        config.personal_calendar_id
+        cfg.personal_calendar_id
     )
 
-    # Display configuration
-    logger.info("=" * 60)
-    logger.info("EDS Calendar Sync")
-    logger.info("=" * 60)
+    # -- Info panel ----------------------------------------------------------
+    direction_label = {
+        "both": "[cyan]↔ Bidirectional[/]",
+        "to-personal": "[cyan]→ Work → Personal[/]",
+        "to-work": "[cyan]← Personal → Work[/]",
+    }[cfg.sync_direction]
 
-    # Format calendar display with account info
-    work_display = f"{work_name}"
-    if work_account:
-        work_display += f" ({work_account})"
-    logger.info(f"Work Calendar:     {work_display}")
-    logger.info(f"                   UID: {work_uid}")
+    work_display = work_name + (f" ({work_account})" if work_account else "")
+    personal_display = personal_name + (f" ({personal_account})" if personal_account else "")
 
-    personal_display = f"{personal_name}"
-    if personal_account:
-        personal_display += f" ({personal_account})"
-    logger.info(f"Personal Calendar: {personal_display}")
-    logger.info(f"                   UID: {personal_uid}")
-
-    logger.info(f"State Database:    {config.state_db_path}")
-
-    if config.clear:
-        logger.info("Operation:         CLEAR (remove all synced events)")
+    if cfg.clear:
+        op_line = Text("CLEAR (remove all synced events, no resync)", style="bold red")
+    elif cfg.refresh:
+        op_line = Text("REFRESH (remove synced events then resync)", style="bold yellow")
     else:
-        # Display sync direction
-        direction_display = {
-            'both': 'BIDIRECTIONAL (work ↔ personal)',
-            'to-personal': 'ONE-WAY (work → personal)',
-            'to-work': 'ONE-WAY (personal → work)'
-        }
-        logger.info(f"Sync Direction:    {direction_display[config.sync_direction]}")
-        if config.refresh:
-            logger.info("Refresh:           YES (remove synced events and resync)")
+        op_line = Text("SYNC", style="bold green")
 
-    logger.info(f"Mode:              {'DRY RUN' if config.dry_run else 'LIVE'}")
-    logger.info("=" * 60)
+    info = Text()
+    info.append("  Work:      ", style="bold")
+    info.append(f"{work_display}\n")
+    info.append(f"             {work_uid}\n", style="dim")
+    info.append("  Personal:  ", style="bold")
+    info.append(f"{personal_display}\n")
+    info.append(f"             {personal_uid}\n", style="dim")
+    info.append("  Direction: ")
+    info.append_text(Text.from_markup(direction_label))
+    info.append("\n  Operation: ")
+    info.append_text(op_line)
+    if cfg.dry_run:
+        info.append("\n  Mode:      ")
+        info.append("DRY RUN", style="bold magenta")
 
-    # Confirmation prompt (skip if --yes or --dry-run)
-    if not config.yes and not config.dry_run:
-        try:
-            response = input("Proceed with sync? [y/N]: ").strip().lower()
-            if response not in ('y', 'yes'):
-                logger.info("Sync cancelled by user")
-                sys.exit(0)
-        except EOFError:
-            # Non-interactive mode without --yes flag
-            logger.error(
-                "Cannot prompt for confirmation in non-interactive mode. "
-                "Use --yes to proceed."
-            )
-            sys.exit(1)
+    console.print(Panel(info, title="[bold]EDS Calendar Sync[/bold]"))
 
-    # Run synchronization
+    # -- Confirmation --------------------------------------------------------
+    if not cfg.yes and not cfg.dry_run:
+        typer.confirm("Proceed?", abort=True)
+
+    # -- Run -----------------------------------------------------------------
     try:
-        sync = CalendarSynchronizer(config)
-        stats = sync.run()
-
-        logger.info("=" * 60)
-        logger.info("Sync Complete!")
-        logger.info(f"  Added:    {stats.added}")
-        logger.info(f"  Modified: {stats.modified}")
-        logger.info(f"  Deleted:  {stats.deleted}")
-        logger.info(f"  Errors:   {stats.errors}")
-        logger.info("=" * 60)
-
-        sys.exit(0 if stats.errors == 0 else 1)
-
+        stats = CalendarSynchronizer(cfg).run()
     except CalendarSyncError as e:
-        logger.error(f"Sync failed: {e}")
-        sys.exit(1)
+        console.print(f"[bold red]Sync failed:[/] {e}")
+        raise typer.Exit(1)
     except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        sys.exit(130)
+        console.print("[yellow]Interrupted by user[/]")
+        raise typer.Exit(130)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        sys.exit(1)
+        console.print_exception()
+        console.print(f"[bold red]Unexpected error:[/] {e}")
+        raise typer.Exit(1)
+
+    # -- Results table -------------------------------------------------------
+    results = Table.grid(padding=(0, 2))
+    results.add_column(style="bold")
+    results.add_column(justify="right")
+    results.add_row("Added", str(stats.added))
+    results.add_row("Modified", str(stats.modified))
+    results.add_row("Deleted", str(stats.deleted))
+    error_val = Text(str(stats.errors))
+    if stats.errors == 0:
+        error_val.append(" ✓", style="green")
+    else:
+        error_val.stylize("bold red")
+    results.add_row("Errors", error_val)
+
+    console.print(Panel(results, title="[bold]Results[/bold]", expand=False))
+
+    if stats.errors:
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Subcommands: sync / refresh / clear share the same options
+# ---------------------------------------------------------------------------
+
+_WORK_OPT = Annotated[
+    Optional[str],
+    typer.Option("--work-calendar", "-w", help="Work calendar EDS UID (overrides config)"),
+]
+_PERS_OPT = Annotated[
+    Optional[str],
+    typer.Option("--personal-calendar", "-p", help="Personal calendar EDS UID (overrides config)"),
+]
+_TO_PERS = Annotated[bool, typer.Option("--to-personal", help="One-way: work → personal only")]
+_TO_WORK = Annotated[bool, typer.Option("--to-work", help="One-way: personal → work only")]
+_DRY_RUN = Annotated[bool, typer.Option("--dry-run", "-n", help="Preview changes without applying")]
+_YES = Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")]
+
+
+@app.command()
+def sync(
+    work_calendar: _WORK_OPT = None,
+    personal_calendar: _PERS_OPT = None,
+    to_personal: _TO_PERS = False,
+    to_work: _TO_WORK = False,
+    dry_run: _DRY_RUN = False,
+    yes: _YES = False,
+) -> None:
+    """Synchronise calendars (bidirectional by default)."""
+    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
+                            dry_run=dry_run, refresh=False, clear=False, yes=yes))
+
+
+@app.command()
+def refresh(
+    work_calendar: _WORK_OPT = None,
+    personal_calendar: _PERS_OPT = None,
+    to_personal: _TO_PERS = False,
+    to_work: _TO_WORK = False,
+    dry_run: _DRY_RUN = False,
+    yes: _YES = False,
+) -> None:
+    """Remove synced events then re-sync from scratch."""
+    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
+                            dry_run=dry_run, refresh=True, clear=False, yes=yes))
+
+
+@app.command()
+def clear(
+    work_calendar: _WORK_OPT = None,
+    personal_calendar: _PERS_OPT = None,
+    to_personal: _TO_PERS = False,
+    to_work: _TO_WORK = False,
+    dry_run: _DRY_RUN = False,
+    yes: _YES = False,
+) -> None:
+    """Remove all synced events without re-syncing."""
+    _run_sync(_build_config(work_calendar, personal_calendar, to_personal, to_work,
+                            dry_run=dry_run, refresh=False, clear=True, yes=yes))
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: migrate
+# ---------------------------------------------------------------------------
+
+@app.command()
+def migrate(
+    old_work: Annotated[
+        Optional[str], typer.Option(help="Old work calendar UID")
+    ] = None,
+    new_work: Annotated[
+        Optional[str], typer.Option(help="New work calendar UID")
+    ] = None,
+    old_personal: Annotated[
+        Optional[str], typer.Option(help="Old personal calendar UID")
+    ] = None,
+    new_personal: Annotated[
+        Optional[str], typer.Option(help="New personal calendar UID")
+    ] = None,
+    dry_run: _DRY_RUN = False,
+) -> None:
+    """Update calendar IDs in state DB after GOA reconnection."""
+    work_pair = (old_work, new_work)
+    pers_pair = (old_personal, new_personal)
+
+    if not (all(work_pair) or all(pers_pair)):
+        console.print(
+            "[bold red]Error:[/] At least one fully specified pair is required:\n"
+            "  [cyan]--old-work[/] UID [cyan]--new-work[/] UID, and/or\n"
+            "  [cyan]--old-personal[/] UID [cyan]--new-personal[/] UID"
+        )
+        raise typer.Exit(1)
+
+    for label, pair in [("work", work_pair), ("personal", pers_pair)]:
+        if any(pair) and not all(pair):
+            console.print(
+                f"[bold red]Error:[/] Both [cyan]--old-{label}[/] and "
+                f"[cyan]--new-{label}[/] must be given together."
+            )
+            raise typer.Exit(1)
+
+    state_db_path = state.state_db
+    if not state_db_path.exists():
+        console.print(f"[bold red]Error:[/] State database not found: {state_db_path}")
+        raise typer.Exit(1)
+
+    # Info panel
+    info = Text()
+    info.append("  State DB:  ", style="bold")
+    info.append(f"{state_db_path}\n")
+    if all(work_pair):
+        info.append("  Work:      ", style="bold")
+        info.append(f"{work_pair[0]} → {work_pair[1]}\n")
+    if all(pers_pair):
+        info.append("  Personal:  ", style="bold")
+        info.append(f"{pers_pair[0]} → {pers_pair[1]}\n")
+    if dry_run:
+        info.append("  Mode:      ", style="bold")
+        info.append("DRY RUN", style="bold magenta")
+
+    console.print(Panel(info, title="[bold]Calendar ID Migration[/bold]"))
+
+    work_rows, pers_rows = migrate_calendar_ids_in_db(
+        state_db_path,
+        old_work, new_work,
+        old_personal, new_personal,
+        dry_run,
+    )
+
+    prefix = "[DRY RUN] Would update" if dry_run else "Updated"
+    results = Table.grid(padding=(0, 2))
+    results.add_column(style="bold")
+    results.add_column(justify="right")
+    if all(work_pair):
+        results.add_row("Work records", f"{prefix} {work_rows}")
+    if all(pers_pair):
+        results.add_row("Personal records", f"{prefix} {pers_rows}")
+
+    console.print(Panel(results, title="[bold]Results[/bold]", expand=False))
+
+    if work_rows == 0 and pers_rows == 0:
+        console.print("[yellow]Warning:[/] No matching records found — verify the old UIDs.")
+
+    if not dry_run:
+        console.print(
+            "\n[bold]Next steps:[/]\n"
+            "  1. Update [cyan]~/.config/eds-calendar-sync.conf[/] with the new UIDs\n"
+            "  2. Run [cyan]eds-calendar-sync sync --dry-run[/] to verify everything works"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: calendars
+# ---------------------------------------------------------------------------
+
+@app.command()
+def calendars() -> None:
+    """List all configured EDS calendars."""
+    import gi
+    gi.require_version('EDataServer', '1.2')
+    from gi.repository import EDataServer
+
+    from .debug import list_calendars as _list_calendars
+
+    registry = EDataServer.SourceRegistry.new_sync(None)
+    _list_calendars(registry, console)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: inspect
+# ---------------------------------------------------------------------------
+
+@app.command()
+def inspect(
+    calendar_uid: Annotated[str, typer.Argument(help="Calendar UID to inspect")],
+    title: Annotated[
+        Optional[str], typer.Option(help="Filter by SUMMARY substring (case-insensitive)")
+    ] = None,
+    uid: Annotated[
+        Optional[str], typer.Option(help="Filter by UID substring (case-insensitive)")
+    ] = None,
+    no_raw: Annotated[bool, typer.Option("--no-raw", help="Omit the raw iCal block")] = False,
+    exceptions_only: Annotated[
+        bool, typer.Option("--exceptions-only", help="Show only exception VEVENTs (have RECURRENCE-ID)")
+    ] = False,
+    masters_only: Annotated[
+        bool, typer.Option("--masters-only", help="Show only master VEVENTs (no RECURRENCE-ID)")
+    ] = False,
+) -> None:
+    """Inspect / debug events in a calendar."""
+    import gi
+    gi.require_version('EDataServer', '1.2')
+    gi.require_version('ECal', '2.0')
+    gi.require_version('ICalGLib', '3.0')
+    from gi.repository import EDataServer, ECal, ICalGLib
+
+    from .debug import dump_event
+
+    registry = EDataServer.SourceRegistry.new_sync(None)
+    source = registry.ref_source(calendar_uid)
+    if not source:
+        console.print(f"[bold red]Error:[/] Calendar [cyan]{calendar_uid}[/] not found.")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[bold]Calendar:[/] {source.get_display_name()} "
+        f"[dim]({calendar_uid})[/dim]"
+    )
+
+    client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 30, None)
+    _, objects = client.get_object_list_sync("#t", None)
+    console.print(f"[bold]Events:[/] {len(objects)} total")
+
+    title_filter = title.lower() if title else None
+    uid_filter = uid.lower() if uid else None
+
+    count = 0
+    for obj in objects:
+        comp = ICalGLib.Component.new_from_string(obj) if isinstance(obj, str) else obj
+
+        vevent = comp
+        if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            vevent = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+            if not vevent:
+                continue
+
+        if title_filter:
+            sp = vevent.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY)
+            summary = (sp.get_summary() or '') if sp else ''
+            if title_filter not in summary.lower():
+                continue
+
+        if uid_filter:
+            if uid_filter not in (vevent.get_uid() or '').lower():
+                continue
+
+        has_rid = vevent.get_first_property(
+            ICalGLib.PropertyKind.RECURRENCEID_PROPERTY
+        ) is not None
+
+        if exceptions_only and not has_rid:
+            continue
+        if masters_only and has_rid:
+            continue
+
+        count += 1
+        dump_event(vevent, console, show_raw=not no_raw)
+
+    console.print(f"\n[bold]Matched {count} event(s)[/bold]")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    app()

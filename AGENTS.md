@@ -72,12 +72,12 @@ Deletion semantics:
 - If only the **copy** is deleted, nothing happens (it will be recreated on next sync if the
   original still exists — or the pair record is cleaned from state).
 
-### 3.2 One-Way: Work → Personal (`--only-to-personal`)
+### 3.2 One-Way: Work → Personal (`--to-personal`)
 
 Work events are synced into the personal calendar using `normal` sanitization. Personal events are
 ignored. The personal calendar is treated as a pure write target.
 
-### 3.3 One-Way: Personal → Work (`--only-to-work`)
+### 3.3 One-Way: Personal → Work (`--to-work`)
 
 Personal events are synced into the work calendar using `busy` sanitization. Work events are
 ignored. The work calendar is treated as a pure write target.
@@ -171,7 +171,7 @@ back from EDS after writing (to capture any server-added properties) and its has
 
 ### 5.4 Fallback: Metadata Scan
 
-When `--refresh` or `--clear` is requested and the state database is empty (e.g. was deleted or
+When `refresh` or `clear` is requested and the state database is empty (e.g. was deleted or
 migrated), the tool falls back to scanning calendars for events carrying the
 `CALENDAR-SYNC-MANAGED` category and treats those as managed events.
 
@@ -187,18 +187,18 @@ Connects to both calendars, loads state, processes creates/updates/deletes, comm
 Logs all operations that *would* be performed without making any changes. Automatically skips the
 confirmation prompt.
 
-### 6.3 Refresh (`--refresh`)
+### 6.3 Refresh (`refresh` subcommand)
 
 Before syncing, removes only the managed events we created (identified via state DB, falling back
 to CATEGORIES scan if state is empty), clears the state DB, then proceeds with a normal sync as if
 starting fresh. Non-managed events are untouched.
 
 Respects direction:
-- `both`: removes managed events from both calendars
-- `--only-to-personal`: removes managed events from personal calendar only
-- `--only-to-work`: removes managed events from work calendar only
+- `both` (default): removes managed events from both calendars
+- `--to-personal`: removes managed events from personal calendar only
+- `--to-work`: removes managed events from work calendar only
 
-### 6.4 Clear (`--clear`)
+### 6.4 Clear (`clear` subcommand)
 
 Removes all managed events we created (identified via CATEGORIES scan) and clears the state DB.
 Does **not** resync afterward. Respects direction flags to limit which calendar is cleared.
@@ -215,24 +215,40 @@ making changes. This is skipped automatically when:
 ## 7. CLI Reference
 
 ```
-eds-calendar-sync.py [OPTIONS]
+eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND [OPTIONS]
 ```
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--work-calendar UID` | str | — | EDS source UID for work calendar |
-| `--personal-calendar UID` | str | — | EDS source UID for personal calendar |
-| `--config PATH` | path | `~/.config/eds-calendar-sync.conf` | INI config file |
+### Global options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `--config` / `-c PATH` | path | `~/.config/eds-calendar-sync.conf` | INI config file |
 | `--state-db PATH` | path | `~/.local/share/eds-calendar-sync-state.db` | SQLite state DB |
-| `--only-to-personal` | flag | off | One-way: work → personal only |
-| `--only-to-work` | flag | off | One-way: personal → work only |
-| `--refresh` | flag | off | Clear managed events then resync |
-| `--clear` | flag | off | Remove managed events, no resync |
-| `--dry-run` | flag | off | Preview changes without writing |
-| `--yes` / `-y` | flag | off | Skip confirmation prompt |
 | `--verbose` / `-v` | flag | off | Enable debug logging |
 
-`--only-to-personal` and `--only-to-work` are mutually exclusive.
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `sync` | Synchronise calendars (bidirectional by default) |
+| `refresh` | Remove synced events then re-sync |
+| `clear` | Remove all synced events without re-syncing |
+| `migrate` | Update calendar IDs in state DB after GOA reconnection |
+| `calendars` | List all configured EDS calendars |
+| `inspect UID` | Inspect / debug events in a calendar |
+
+### Options for `sync` / `refresh` / `clear`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--work-calendar UID` | `-w` | str | — | EDS source UID for work calendar |
+| `--personal-calendar UID` | `-p` | str | — | EDS source UID for personal calendar |
+| `--to-personal` | | flag | off | One-way: work → personal only |
+| `--to-work` | | flag | off | One-way: personal → work only |
+| `--dry-run` | `-n` | flag | off | Preview changes without writing |
+| `--yes` | `-y` | flag | off | Skip confirmation prompt |
+
+`--to-personal` and `--to-work` are mutually exclusive.
 
 ### 7.1 Config File Format
 
@@ -247,17 +263,19 @@ CLI flags override config file values. The config file is silently skipped if it
 
 ## 8. Output Format
 
-Sync statistics are printed to stderr (via Python's `logging` module) at the end of every run:
+Rich-formatted output via `rich` panels and tables. Sync results are displayed in a panel at the
+end of every run:
 
 ```
-============================================================
-Sync Complete!
-  Added:    N
-  Modified: N
-  Deleted:  N
-  Errors:   N
-============================================================
+╭──────── Results ────────╮
+│  Added      N           │
+│  Modified   N           │
+│  Deleted    N           │
+│  Errors     N  ✓        │
+╰─────────────────────────╯
 ```
+
+Log output (INFO/DEBUG from sync modules) is rendered via `rich.logging.RichHandler`.
 
 Exit code is `0` on success, `1` if any errors occurred or on fatal failure, `130` on
 `KeyboardInterrupt`.
@@ -272,7 +290,9 @@ Exit code is `0` on success, `1` if any errors occurred or on fatal failure, `13
 | `ICalGLib` | 3.0 | iCalendar parsing and component manipulation |
 | `GLib` | — | GLib error handling |
 
-Python stdlib: `sqlite3`, `hashlib`, `uuid`, `argparse`, `configparser`, `logging`, `pathlib`.
+Python stdlib: `sqlite3`, `hashlib`, `uuid`, `configparser`, `logging`, `pathlib`.
+
+Third-party: `typer` (CLI framework), `rich` (terminal output, logging handler).
 
 
 ## 10. Known Limitations and Design Decisions

@@ -64,7 +64,7 @@ pip install --user -e .
 ### Step 1: Find Your Calendar UIDs
 
 ```bash
-debug-calendar --list
+eds-calendar-sync calendars
 ```
 
 This will display all calendars available in EDS with their UIDs. Identify your:
@@ -97,31 +97,15 @@ The tool shows calendar names and asks for confirmation before syncing:
 
 ```bash
 # Dry run to preview (no confirmation needed)
-eds-calendar-sync \
+eds-calendar-sync sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193 \
   --dry-run
 
 # Actual sync (will prompt for confirmation)
-eds-calendar-sync \
+eds-calendar-sync sync \
   --work-calendar d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda \
   --personal-calendar 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
-```
-
-**Output example:**
-```
-============================================================
-EDS Calendar Sync
-============================================================
-Work Calendar:     Company Calendar (work.user@company.com)
-                   UID: d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
-Personal Calendar: Personal Calendar (personal.user@gmail.com)
-                   UID: 05a8819b2547ba3bbc244fdd3d135121ade11525
-State Database:    /home/user/.local/share/eds-calendar-sync-state.db
-Sync Direction:    BIDIRECTIONAL (work ↔ personal)
-Mode:              LIVE
-============================================================
-Proceed with sync? [y/N]:
 ```
 
 ### Sync Modes
@@ -131,28 +115,28 @@ Syncs both directions: work ↔ personal
 
 ```bash
 # Interactive (prompts for confirmation)
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID
+eds-calendar-sync sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID
 
 # Non-interactive (auto-confirm)
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+eds-calendar-sync sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
 #### One-Way Sync: Work → Personal Only
 ```bash
-eds-calendar-sync \
+eds-calendar-sync sync \
   --work-calendar WORK_UID \
   --personal-calendar PERSONAL_UID \
-  --only-to-personal --yes
+  --to-personal --yes
 ```
 
 Work events appear in personal calendar with titles and details (sanitized).
 
 #### One-Way Sync: Personal → Work Only
 ```bash
-eds-calendar-sync \
+eds-calendar-sync sync \
   --work-calendar WORK_UID \
   --personal-calendar PERSONAL_UID \
-  --only-to-work --yes
+  --to-work --yes
 ```
 
 Personal events appear in work calendar as "Busy" (maximum privacy).
@@ -162,7 +146,7 @@ Personal events appear in work calendar as "Busy" (maximum privacy).
 #### Dry Run (Preview Changes)
 ```bash
 # Shows what would happen without making changes
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --dry-run
+eds-calendar-sync sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --dry-run
 ```
 
 Dry-run mode automatically skips confirmation prompt.
@@ -170,65 +154,63 @@ Dry-run mode automatically skips confirmation prompt.
 #### Refresh (Resync Everything)
 ```bash
 # Remove all synced events and resync from scratch
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
+eds-calendar-sync refresh --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
-**Important**: `--refresh` respects sync direction:
+**Important**: `refresh` respects sync direction:
 - Bidirectional: Removes synced events from BOTH calendars
-- `--only-to-personal`: Removes only from personal calendar
-- `--only-to-work`: Removes only from work calendar
+- `--to-personal`: Removes only from personal calendar
+- `--to-work`: Removes only from work calendar
 
 Original (non-synced) events are always preserved.
 
 #### Clear (Remove All Synced Events)
 ```bash
 # Remove all events created by this tool (no resync)
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --clear --yes
+eds-calendar-sync clear --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
-Like `--refresh` but without resyncing. Also respects sync direction.
+Like `refresh` but without resyncing. Also respects sync direction.
 
 ### Configuration File Usage
 
 If you created `~/.config/eds-calendar-sync.conf`:
 
 ```bash
-# Uses config file
-eds-calendar-sync
+# Uses config file (bidirectional sync)
+eds-calendar-sync sync
 
 # With options
-eds-calendar-sync --dry-run
-eds-calendar-sync --only-to-personal --yes
-eds-calendar-sync --refresh --yes
+eds-calendar-sync sync --dry-run
+eds-calendar-sync sync --to-personal --yes
+eds-calendar-sync refresh --yes
 ```
 
-### Command-Line Options
+### Subcommand Reference
 
 ```
---work-calendar WORK_UID      Work calendar UID (required)
---personal-calendar PERS_UID  Personal calendar UID (required)
---config CONFIG               Config file path (default: ~/.config/eds-calendar-sync.conf)
---state-db PATH               State database path (default: ~/.local/share/eds-calendar-sync-state.db)
+eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND
 
-Sync Direction (mutually exclusive):
---only-to-personal            Sync work → personal only (default is bidirectional)
---only-to-work                Sync personal → work only (default is bidirectional)
+Global options:
+  --config, -c PATH     Config file path (default: ~/.config/eds-calendar-sync.conf)
+  --state-db PATH       State database path (default: ~/.local/share/eds-calendar-sync-state.db)
+  --verbose, -v         Enable verbose debug output
 
-Modes:
---dry-run                     Preview changes without applying them
---refresh                     Remove synced events and resync (respects direction)
---clear                       Remove all synced events without resyncing
+Commands:
+  sync        Synchronise calendars (bidirectional by default)
+  refresh     Remove synced events then re-sync
+  clear       Remove all synced events without re-syncing
+  migrate     Update calendar IDs in state DB after GOA reconnection
+  calendars   List all configured EDS calendars
+  inspect     Inspect / debug events in a calendar
 
-Options:
---yes, -y                     Auto-confirm without prompting (required for automation)
---verbose, -v                 Enable verbose debug output
-
-Calendar ID migration (after GOA reconnection):
---migrate-calendar-ids        Update calendar IDs in state DB (no EDS connection needed)
---old-work-calendar UID       Old work calendar UID to replace
---new-work-calendar UID       New work calendar UID
---old-personal-calendar UID   Old personal calendar UID to replace
---new-personal-calendar UID   New personal calendar UID
+Options for sync / refresh / clear:
+  --work-calendar, -w UID     Work calendar EDS UID (overrides config)
+  --personal-calendar, -p UID Personal calendar EDS UID (overrides config)
+  --to-personal               One-way: work → personal only
+  --to-work                   One-way: personal → work only
+  --dry-run, -n               Preview changes without applying them
+  --yes, -y                   Skip confirmation prompt (required for automation)
 ```
 
 ## Systemd Timer Setup
@@ -254,7 +236,7 @@ nano ~/.config/systemd/user/eds-calendar-sync.service
 
 **Important**: Add `--yes` flag to ExecStart line for automation:
 ```ini
-ExecStart=%h/.local/bin/eds-calendar-sync --work-calendar UID --personal-calendar UID --yes
+ExecStart=%h/.local/bin/eds-calendar-sync sync --work-calendar UID --personal-calendar UID --yes
 ```
 
 ### 2. Enable and Start Timer
@@ -404,20 +386,20 @@ CREATE TABLE sync_state (
 );
 ```
 
-**Multi-pair support:** A single state DB can safely serve multiple calendar pairs. Records are partitioned by `(work_calendar_id, personal_calendar_id)`, so different pairs never interfere with each other. `--clear` and `--refresh` only affect the current pair's records.
+**Multi-pair support:** A single state DB can safely serve multiple calendar pairs. Records are partitioned by `(work_calendar_id, personal_calendar_id)`, so different pairs never interfere with each other. `clear` and `refresh` only affect the current pair's records.
 
-**Safe direction switching:** Switching between `--only-to-personal`, `--only-to-work`, and `--both` for the same calendar pair is safe — all modes use a consistent storage convention and can coexist in the same DB.
+**Safe direction switching:** Switching between `--to-personal`, `--to-work`, and bidirectional (default) for the same calendar pair is safe — all modes use a consistent storage convention and can coexist in the same DB.
 
-**Automatic schema migration:** If you have a state DB from an older version (before multi-pair support), it is automatically migrated on the first run. If the old DB contains `--only-to-work` records, a one-time `--refresh` will be required (the tool will tell you).
+**Automatic schema migration:** If you have a state DB from an older version (before multi-pair support), it is automatically migrated on the first run. If the old DB contains `--to-work` records, a one-time `refresh` will be required (the tool will tell you).
 
 **To reset the state** (forces full resync):
 ```bash
 # Preferred: safely removes synced events then resyncs
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --refresh --yes
+eds-calendar-sync refresh --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 
 # Alternative: delete the DB file entirely (all pairs lose their state)
 rm ~/.local/share/eds-calendar-sync-state.db
-eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
+eds-calendar-sync sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --yes
 ```
 
 ## Troubleshooting
@@ -428,7 +410,7 @@ eds-calendar-sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID --ye
 Error: Calendar with UID 'xxx' not found in EDS
 ```
 
-**Solution**: Run `debug-calendar --list` to verify the UID and ensure the calendar is enabled.
+**Solution**: Run `eds-calendar-sync calendars` to verify the UID and ensure the calendar is enabled.
 
 ### Permission Errors
 
@@ -444,7 +426,7 @@ Error: Failed to connect to calendar
 Error: Read-only calendars can't be modified
 ```
 
-**Solution**: Verify that your calendar is not read-only. Check with `debug-calendar --list`. Some calendars (like "Birthdays") are read-only.
+**Solution**: Verify that your calendar is not read-only. Check with `eds-calendar-sync calendars`. Some calendars (like "Birthdays") are read-only.
 
 ### Duplicate Categories Error
 
@@ -466,7 +448,7 @@ Error: Cannot prompt for confirmation in non-interactive mode. Use --yes to proc
 
 **Solution**: Add `--yes` flag when running from scripts or systemd:
 ```bash
-eds-calendar-sync --work-calendar UID --personal-calendar UID --yes
+eds-calendar-sync sync --work-calendar UID --personal-calendar UID --yes
 ```
 
 ### Systemd Service Fails
@@ -499,43 +481,43 @@ These are Exchange-specific rejections. Common causes and what the tool does aut
 | `ExpandSeries can only be performed against a series` | RECURRENCE-ID present (exception occurrence without master series in target) | Stripped from sanitized event |
 | `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, empty RRULE+EXDATE series, or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped |
 
-If errors persist, run with `--verbose` — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
+If errors persist, run with `--verbose` (global flag) — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
 
 ### Calendar UIDs Changed After GOA Reconnection
 
 When a GNOME Online Accounts connection is removed and re-added, EDS may assign new UIDs to the
-calendar sources. Use `--migrate-calendar-ids` to update the state database without losing sync
+calendar sources. Use the `migrate` subcommand to update the state database without losing sync
 history or triggering a full resync.
 
 ```bash
 # Step 1: Find the new UIDs
-debug-calendar --list
+eds-calendar-sync calendars
 
 # Step 2: Preview the migration (dry run)
-eds-calendar-sync --migrate-calendar-ids --dry-run \
-    --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
-    --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
+eds-calendar-sync migrate --dry-run \
+    --old-work OLD_WORK_UID --new-work NEW_WORK_UID \
+    --old-personal OLD_PERS_UID --new-personal NEW_PERS_UID
 
 # Step 3: Apply the migration
-eds-calendar-sync --migrate-calendar-ids \
-    --old-work-calendar OLD_WORK_UID --new-work-calendar NEW_WORK_UID \
-    --old-personal-calendar OLD_PERS_UID --new-personal-calendar NEW_PERS_UID
+eds-calendar-sync migrate \
+    --old-work OLD_WORK_UID --new-work NEW_WORK_UID \
+    --old-personal OLD_PERS_UID --new-personal NEW_PERS_UID
 
 # Step 4: Update your config file with the new UIDs
 nano ~/.config/eds-calendar-sync.conf
 
 # Step 5: Run a normal sync
-eds-calendar-sync --dry-run
-eds-calendar-sync --yes
+eds-calendar-sync sync --dry-run
+eds-calendar-sync sync --yes
 ```
 
 You can omit either side if only that calendar's UID changed.
 
 ### Verbose Debugging
 
-Run with `--verbose` to see detailed operations:
+Run with `--verbose` (before the subcommand) to see detailed operations:
 ```bash
-eds-calendar-sync --work-calendar UID --personal-calendar UID --verbose --dry-run
+eds-calendar-sync --verbose sync --work-calendar UID --personal-calendar UID --dry-run
 ```
 
 ## Architecture

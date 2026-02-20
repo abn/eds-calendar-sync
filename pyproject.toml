@@ -11,11 +11,11 @@ license = { file = "LICENSE" }
 requires-python = ">=3.9"
 dependencies = [
     "PyGObject",
+    "typer[all]",
 ]
 
 [project.scripts]
 eds-calendar-sync = "eds_calendar_sync.cli:main"
-debug-calendar    = "eds_calendar_sync.debug:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/eds_calendar_sync"]

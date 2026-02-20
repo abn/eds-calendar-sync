@@ -24,15 +24,15 @@ pip install --user -e .
 ### 1. Find Your Calendar UIDs
 
 ```bash
-debug-calendar --list
+eds-calendar-sync calendars
 ```
 
 Output example:
 ```
-Display Name          Account                    Mode         UID
---------------------------------------------------------------------------------------------
-Work Calendar         work.user@company.com      Read-write   d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
-Personal              personal.user@gmail.com    Read-write   02e0b7e48f4e0dbfb2c91861a8e184a75617e193
+ Display Name          Account                    Mode         UID
+ ─────────────────────────────────────────────────────────────────────
+ Work Calendar         work.user@company.com      Read-write   d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
+ Personal              personal.user@gmail.com    Read-write   02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 ```
 
 ### 2. Create Configuration File
@@ -58,31 +58,7 @@ personal_calendar_id = 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
 See what will happen without making changes:
 
 ```bash
-eds-calendar-sync --dry-run
-```
-
-Expected output:
-```
-============================================================
-EDS Calendar Sync
-============================================================
-Work Calendar:     Company Calendar (work.user@company.com)
-                   UID: d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
-Personal Calendar: Personal Calendar (personal.user@gmail.com)
-                   UID: 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
-State Database:    /home/user/.local/share/eds-calendar-sync-state.db
-Sync Direction:    BIDIRECTIONAL (work ↔ personal)
-Mode:              DRY RUN
-============================================================
-[DRY RUN] Would CREATE event: Meeting with Team -> <uuid>
-...
-============================================================
-Sync Complete!
-  Added:    N
-  Modified: 0
-  Deleted:  0
-  Errors:   0
-============================================================
+eds-calendar-sync sync --dry-run
 ```
 
 ### Actual Sync
@@ -90,7 +66,7 @@ Sync Complete!
 Once you're satisfied with the dry run:
 
 ```bash
-eds-calendar-sync
+eds-calendar-sync sync
 ```
 
 The tool will show configuration and prompt for confirmation before making any changes.
@@ -146,7 +122,7 @@ gnome-calendar
 
 ```bash
 # Run with verbose logging
-eds-calendar-sync --verbose --dry-run
+eds-calendar-sync --verbose sync --dry-run
 
 # Check logs
 journalctl --user -u eds-calendar-sync.service -n 100
@@ -159,8 +135,8 @@ journalctl --user -u eds-calendar-sync.service -n 100
 systemctl --user stop eds-calendar-sync.timer
 
 # Do a full refresh (removes synced events and resyncs)
-eds-calendar-sync --refresh --dry-run  # Check first
-eds-calendar-sync --refresh --yes       # Execute
+eds-calendar-sync sync --dry-run    # Check first
+eds-calendar-sync refresh --yes     # Execute
 ```
 
 ## What Gets Synced?

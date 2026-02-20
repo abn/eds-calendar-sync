@@ -1,31 +1,10 @@
 """
-Debug tool: inspect EDS calendar events.
+Debug/inspect tools for EDS calendar events.
 
-Usage:
-    # List all configured calendars
-    debug-calendar --list
-
-    # Dump all events in a calendar
-    debug-calendar <calendar-uid>
-
-    # Filter by title substring (case-insensitive)
-    debug-calendar <calendar-uid> --title "team meeting"
-
-    # Filter by UID substring
-    debug-calendar <calendar-uid> --uid "AAMkA"
-
-    # Hide the raw iCal block (show summary only)
-    debug-calendar <calendar-uid> --title "foo" --no-raw
-
-    # Show only events with RECURRENCE-ID (exception VEVENTs)
-    debug-calendar <calendar-uid> --exceptions-only
-
-    # Show only master events (no RECURRENCE-ID)
-    debug-calendar <calendar-uid> --masters-only
+Importable functions:
+  list_calendars(registry, console)  — render a Rich table of all calendars
+  dump_event(vevent, console, show_raw=True)  — render one event in a Rich Panel
 """
-
-import sys
-import argparse
 
 import gi
 gi.require_version('EDataServer', '1.2')
@@ -33,11 +12,23 @@ gi.require_version('ECal', '2.0')
 gi.require_version('ICalGLib', '3.0')
 from gi.repository import EDataServer, ECal, ICalGLib, GLib  # noqa: F401
 
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.text import Text
 
-def list_calendars(registry):
+
+def list_calendars(registry, console: Console) -> None:
+    """Render all configured EDS calendars as a Rich table."""
     sources = registry.list_sources(EDataServer.SOURCE_EXTENSION_CALENDAR)
-    print(f"{'Display Name':<35} {'Account':<25} {'Mode':<12} {'UID'}")
-    print("-" * 112)
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Display Name", style="bold")
+    table.add_column("Account")
+    table.add_column("Mode")
+    table.add_column("UID", style="dim")
+
     for source in sources:
         name = source.get_display_name() or "(unnamed)"
         uid = source.get_uid() or ""
@@ -49,10 +40,15 @@ def list_calendars(registry):
                 account = parent_source.get_display_name() or ""
         try:
             client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 5, None)
-            mode = "Read-only" if client.is_readonly() else "Read-write"
+            mode = "Read-write" if not client.is_readonly() else "Read-only"
+            mode_style = "green" if not client.is_readonly() else "yellow"
         except Exception:
             mode = "Unknown"
-        print(f"{name:<35} {account:<25} {mode:<12} {uid}")
+            mode_style = "red"
+
+        table.add_row(name, account, Text(mode, style=mode_style), uid)
+
+    console.print(table)
 
 
 def fmt_prop(vevent, kind, getter):
@@ -80,10 +76,11 @@ def collect_multi(vevent, kind, getter):
     return results
 
 
-def dump_event(vevent, show_raw=True):
+def dump_event(vevent, console: Console, show_raw: bool = True) -> None:
+    """Render a single VEVENT as a Rich Panel."""
     uid = vevent.get_uid() or "(no UID)"
     summary = fmt_prop(vevent, ICalGLib.PropertyKind.SUMMARY_PROPERTY,
-                       lambda p: p.get_summary())
+                       lambda p: p.get_summary()) or "(no summary)"
     rid = fmt_prop(vevent, ICalGLib.PropertyKind.RECURRENCEID_PROPERTY,
                    lambda p: p.get_value_as_string())
     transp = fmt_prop(vevent, ICalGLib.PropertyKind.TRANSP_PROPERTY,
@@ -99,24 +96,33 @@ def dump_event(vevent, show_raw=True):
     exdates = collect_multi(vevent, ICalGLib.PropertyKind.EXDATE_PROPERTY,
                             lambda p: p.get_value_as_string())
 
-    print(f"SUMMARY      : {summary}")
-    print(f"UID          : {uid}")
-    print(f"RECURRENCE-ID: {rid}")
-    print(f"DTSTART      : {dtstart}")
-    print(f"DTEND        : {dtend}")
+    lines = Text()
+
+    def row(label: str, value) -> None:
+        if value is None:
+            return
+        lines.append(f"  {label:<14}: ", style="bold cyan")
+        lines.append(f"{value}\n")
+
+    row("SUMMARY", summary)
+    row("UID", uid)
+    row("RECURRENCE-ID", rid)
+    row("DTSTART", dtstart)
+    row("DTEND", dtend)
     if rrule:
-        print(f"RRULE        : {rrule}")
+        row("RRULE", rrule)
     for ex in exdates:
-        print(f"EXDATE       : {ex}")
-    print(f"TRANSP       : {transp}")
-    print(f"STATUS       : {status}")
+        row("EXDATE", ex)
+    row("TRANSP", transp)
+    row("STATUS", status)
 
     # X-properties
     x_prop = vevent.get_first_property(ICalGLib.PropertyKind.X_PROPERTY)
     while x_prop:
         name = x_prop.get_x_name() or ''
         val = x_prop.get_x() or x_prop.get_value_as_string() or ''
-        print(f"  {name}: {val}")
+        lines.append(f"  {name:<14}: ", style="bold cyan")
+        lines.append(f"{val}\n")
         x_prop = vevent.get_next_property(ICalGLib.PropertyKind.X_PROPERTY)
 
     # Attendees
@@ -127,91 +133,16 @@ def dump_event(vevent, show_raw=True):
         partstat = ps_p.get_partstat() if ps_p else None
         rl_p = attendees.get_first_parameter(ICalGLib.ParameterKind.ROLE_PARAMETER)
         role = rl_p.get_role() if rl_p else None
-        print(f"  ATTENDEE: {val}  PARTSTAT={partstat}  ROLE={role}")
+        lines.append(f"  {'ATTENDEE':<14}: ", style="bold cyan")
+        lines.append(f"{val}  PARTSTAT={partstat}  ROLE={role}\n")
         attendees = vevent.get_next_property(ICalGLib.PropertyKind.ATTENDEE_PROPERTY)
 
+    console.print(Panel(lines, title=f"[bold]{summary}[/bold]", expand=False))
+
     if show_raw:
-        print("\n--- Raw iCal ---")
-        print(vevent.as_ical_string())
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Inspect EDS calendar events for debugging.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument("calendar_uid", nargs="?", help="Calendar UID to inspect")
-    parser.add_argument("--list", action="store_true",
-                        help="List all configured calendars and exit")
-    parser.add_argument("--title", metavar="STR",
-                        help="Filter events whose SUMMARY contains STR (case-insensitive)")
-    parser.add_argument("--uid", metavar="STR",
-                        help="Filter events whose UID contains STR (case-insensitive)")
-    parser.add_argument("--no-raw", action="store_true",
-                        help="Omit the raw iCal block from output")
-    parser.add_argument("--exceptions-only", action="store_true",
-                        help="Show only exception VEVENTs (have RECURRENCE-ID)")
-    parser.add_argument("--masters-only", action="store_true",
-                        help="Show only master VEVENTs (no RECURRENCE-ID)")
-
-    args = parser.parse_args()
-
-    registry = EDataServer.SourceRegistry.new_sync(None)
-
-    if args.list:
-        list_calendars(registry)
-        return
-
-    if not args.calendar_uid:
-        parser.error("calendar_uid is required (or use --list to see available calendars)")
-
-    source = registry.ref_source(args.calendar_uid)
-    if not source:
-        print(f"ERROR: Calendar {args.calendar_uid} not found", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Calendar : {source.get_display_name()} ({args.calendar_uid})")
-    client = ECal.Client.connect_sync(source, ECal.ClientSourceType.EVENTS, 30, None)
-    _, objects = client.get_object_list_sync("#t", None)
-    print(f"Events   : {len(objects)} total")
-
-    title_filter = args.title.lower() if args.title else None
-    uid_filter = args.uid.lower() if args.uid else None
-
-    count = 0
-    for obj in objects:
-        comp = ICalGLib.Component.new_from_string(obj) if isinstance(obj, str) else obj
-
-        vevent = comp
-        if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
-            vevent = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
-            if not vevent:
-                continue
-
-        # Apply filters
-        if title_filter:
-            sp = vevent.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY)
-            summary = (sp.get_summary() or '') if sp else ''
-            if title_filter not in summary.lower():
-                continue
-
-        if uid_filter:
-            if uid_filter not in (vevent.get_uid() or '').lower():
-                continue
-
-        has_rid = vevent.get_first_property(
-            ICalGLib.PropertyKind.RECURRENCEID_PROPERTY
-        ) is not None
-
-        if args.exceptions_only and not has_rid:
-            continue
-        if args.masters_only and has_rid:
-            continue
-
-        count += 1
-        print(f"\n{'='*70}")
-        dump_event(vevent, show_raw=not args.no_raw)
-
-    print(f"\n{'-'*70}")
-    print(f"Matched {count} event(s)")
+        raw = vevent.as_ical_string()
+        console.print(Panel(
+            Syntax(raw, "ical", theme="monokai", word_wrap=True),
+            title="Raw iCal",
+            expand=False,
+        ))
