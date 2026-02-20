@@ -49,23 +49,33 @@ This tool solves specific pain points with Microsoft 365 Exchange and Google Cal
 
 ### Installation
 
+`gi` (PyGObject) is a compiled GNOME system library that cannot be installed from PyPI alone,
+so both install methods below arrange access to it differently.
+
+**Using pipx (recommended):**
+
 ```bash
-# Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
+# System libraries (provides the gi module and EDS typelibs)
 sudo dnf install python3-gobject evolution-data-server
 
-# Install into your user path (recommended — editable install)
-pip install --user -e .
+# Install — --system-site-packages gives the tool's venv access to the system gi
+pipx install --system-site-packages "git+https://github.com/abn/eds-calendar-sync.git"
 ```
 
-> **Note on PyGObject:** `python3-gobject` provides the `gi` module as a compiled system
-> package. It must be installed via your distro package manager rather than pip.
-
-Alternatively, manage dependencies with Poetry (Poetry 2.x required):
+**Using uv tool:**
 
 ```bash
-pipx install poetry
-poetry install                        # creates a venv with system-site-packages enabled
-poetry shell                          # activate the venv, then run eds-calendar-sync directly
+# Build-time headers so uv can compile PyGObject from source
+sudo dnf install python3-devel gobject-introspection-devel glib2-devel evolution-data-server
+
+uv tool install "git+https://github.com/abn/eds-calendar-sync.git"
+```
+
+**Upgrading:**
+
+```bash
+pipx upgrade eds-calendar-sync     # pipx
+uv tool upgrade eds-calendar-sync  # uv
 ```
 
 ## Configuration
@@ -633,12 +643,32 @@ eds-calendar-sync --verbose sync --work-calendar UID --personal-calendar UID --d
 
 This tool is provided as-is for personal use. Modify as needed for your environment.
 
+## Development
+
+Poetry 2.x is used for dependency management during development. The project venv is
+configured with `system-site-packages = true` (see `poetry.toml`) so the system
+`python3-gobject` package is accessible without reinstalling it from PyPI.
+
+```bash
+sudo dnf install python3-gobject evolution-data-server
+pipx install poetry        # or: curl -sSL https://install.python-poetry.org | python3 -
+poetry install             # creates .venv with system-site-packages
+poetry shell               # activate the venv
+```
+
+Pre-commit hooks (ruff lint + format) are configured in `.pre-commit-config.yaml`:
+
+```bash
+pre-commit install          # install hooks once
+pre-commit run --all-files  # run manually
+```
+
 ## Contributing
 
 Contributions welcome! Please:
 1. Test thoroughly before submitting changes
-2. Update README for new features
-3. Follow existing code style
+2. Update documentation for new features
+3. Run `pre-commit run --all-files` before committing
 
 ## See Also
 

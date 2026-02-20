@@ -11,21 +11,21 @@ Get up and running with EDS Calendar Sync in 5 minutes.
 
 ## Installation
 
+**Using pipx (recommended):**
+
 ```bash
-# Install system GObject Introspection libraries (usually pre-installed on Fedora with GNOME)
 sudo dnf install python3-gobject evolution-data-server
-
-# Install into your user path (recommended)
-pip install --user -e .
+pipx install --system-site-packages "git+https://github.com/abn/eds-calendar-sync.git"
 ```
 
-Alternatively, use Poetry (Poetry 2.x required):
+**Using uv tool:**
 
 ```bash
-pipx install poetry
-poetry install   # creates a venv with system-site-packages enabled for gi access
-poetry shell     # activate, then run eds-calendar-sync directly
+sudo dnf install python3-devel gobject-introspection-devel glib2-devel evolution-data-server
+uv tool install "git+https://github.com/abn/eds-calendar-sync.git"
 ```
+
+Both commands install the `eds-calendar-sync` command to your user's tool path.
 
 ## Configuration
 
