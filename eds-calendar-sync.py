@@ -36,6 +36,7 @@ import hashlib
 import uuid
 import argparse
 import logging
+import datetime
 from pathlib import Path
 from typing import Optional, Dict, Set, Tuple
 from dataclasses import dataclass
@@ -449,6 +450,120 @@ class EventSanitizer:
             if mode == 'busy':
                 cls._remove_all_properties(event, ICalGLib.PropertyKind.SUMMARY_PROPERTY)
                 event.add_property(ICalGLib.Property.new_summary("Busy"))
+
+            # Advance DTSTART (and DTEND) to the first occurrence not excluded
+            # by EXDATE, when DTSTART itself falls on an excluded date.
+            # Exchange does not reliably suppress a series occurrence when the
+            # EXDATE coincides with DTSTART — it may still render that first
+            # occurrence in the calendar.  Moving the series start to the next
+            # valid date avoids the ambiguity entirely.
+            _dts_prop  = event.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
+            _rrule_prop = event.get_first_property(ICalGLib.PropertyKind.RRULE_PROPERTY)
+            if _dts_prop and _rrule_prop:
+                _exdates: Set[str] = set()
+                _ed_p = event.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                while _ed_p:
+                    try:
+                        _et = _ed_p.get_exdate()
+                        if _et and not _et.is_null_time():
+                            _exdates.add(
+                                f"{_et.get_year():04d}"
+                                f"{_et.get_month():02d}"
+                                f"{_et.get_day():02d}"
+                            )
+                    except Exception:
+                        pass
+                    _ed_p = event.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                if _exdates:
+                    _dts = _dts_prop.get_dtstart()
+                    _dts_date = (
+                        f"{_dts.get_year():04d}"
+                        f"{_dts.get_month():02d}"
+                        f"{_dts.get_day():02d}"
+                    )
+                    if _dts_date in _exdates:
+                        try:
+                            # Compute event duration so DTEND can be shifted by the
+                            # same amount as DTSTART.
+                            _dte_prop = event.get_first_property(
+                                ICalGLib.PropertyKind.DTEND_PROPERTY
+                            )
+                            if _dte_prop:
+                                _dte = _dte_prop.get_dtend()
+                                _dts_py = datetime.datetime(
+                                    _dts.get_year(), _dts.get_month(), _dts.get_day(),
+                                    _dts.get_hour(), _dts.get_minute(), _dts.get_second(),
+                                )
+                                _dte_py = datetime.datetime(
+                                    _dte.get_year(), _dte.get_month(), _dte.get_day(),
+                                    _dte.get_hour(), _dte.get_minute(), _dte.get_second(),
+                                )
+                                _dur = _dte_py - _dts_py
+                            else:
+                                _dte_prop = None
+                                _dur = datetime.timedelta(hours=1)
+
+                            # Find first RRULE occurrence not in EXDATE.
+                            _rule = _rrule_prop.get_rrule()
+                            _it   = ICalGLib.RecurIterator.new(_rule, _dts)
+                            for _ in range(500):
+                                _occ = _it.next()
+                                if _occ is None or _occ.is_null_time():
+                                    break
+                                _occ_date = (
+                                    f"{_occ.get_year():04d}"
+                                    f"{_occ.get_month():02d}"
+                                    f"{_occ.get_day():02d}"
+                                )
+                                if _occ_date not in _exdates:
+                                    # Build new DTSTART / DTEND strings, preserving TZID.
+                                    _tzid_param = _dts_prop.get_first_parameter(
+                                        ICalGLib.ParameterKind.TZID_PARAMETER
+                                    )
+                                    _occ_py = datetime.datetime(
+                                        _occ.get_year(), _occ.get_month(), _occ.get_day(),
+                                        _occ.get_hour(), _occ.get_minute(), _occ.get_second(),
+                                    )
+                                    _new_dte_py = _occ_py + _dur
+                                    if _tzid_param:
+                                        _tz = _tzid_param.get_tzid()
+                                        _new_dts_str = (
+                                            f"DTSTART;TZID={_tz}:"
+                                            f"{_occ_py.year:04d}{_occ_py.month:02d}{_occ_py.day:02d}"
+                                            f"T{_occ_py.hour:02d}{_occ_py.minute:02d}{_occ_py.second:02d}"
+                                        )
+                                        _new_dte_str = (
+                                            f"DTEND;TZID={_tz}:"
+                                            f"{_new_dte_py.year:04d}{_new_dte_py.month:02d}{_new_dte_py.day:02d}"
+                                            f"T{_new_dte_py.hour:02d}{_new_dte_py.minute:02d}{_new_dte_py.second:02d}"
+                                        )
+                                    else:
+                                        _new_dts_str = (
+                                            f"DTSTART:"
+                                            f"{_occ_py.year:04d}{_occ_py.month:02d}{_occ_py.day:02d}"
+                                            f"T{_occ_py.hour:02d}{_occ_py.minute:02d}{_occ_py.second:02d}Z"
+                                        )
+                                        _new_dte_str = (
+                                            f"DTEND:"
+                                            f"{_new_dte_py.year:04d}{_new_dte_py.month:02d}{_new_dte_py.day:02d}"
+                                            f"T{_new_dte_py.hour:02d}{_new_dte_py.minute:02d}{_new_dte_py.second:02d}Z"
+                                        )
+                                    cls._remove_all_properties(
+                                        event, ICalGLib.PropertyKind.DTSTART_PROPERTY
+                                    )
+                                    event.add_property(
+                                        ICalGLib.Property.new_from_string(_new_dts_str)
+                                    )
+                                    if _dte_prop:
+                                        cls._remove_all_properties(
+                                            event, ICalGLib.PropertyKind.DTEND_PROPERTY
+                                        )
+                                        event.add_property(
+                                            ICalGLib.Property.new_from_string(_new_dte_str)
+                                        )
+                                    break
+                        except Exception:
+                            pass  # On any error, leave DTSTART unchanged
 
             # Add metadata to identify this as a managed event
             # Use CATEGORIES property (X-properties and COMMENT are stripped by Microsoft 365)
