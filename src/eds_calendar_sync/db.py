@@ -6,7 +6,6 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
 
 from eds_calendar_sync.models import CalendarSyncError
 
@@ -18,7 +17,7 @@ class StateDatabase:
         self.db_path = db_path
         self.work_calendar_id = work_calendar_id
         self.personal_calendar_id = personal_calendar_id
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: sqlite3.Connection | None = None
 
     def __enter__(self):
         self.connect()
@@ -202,7 +201,7 @@ class StateDatabase:
         )
         return cursor.fetchall()
 
-    def get_by_source_uid(self, source_uid: str) -> Optional[sqlite3.Row]:
+    def get_by_source_uid(self, source_uid: str) -> sqlite3.Row | None:
         """Get state record by source UID for this calendar pair."""
         cursor = self.conn.execute(
             "SELECT * FROM sync_state "
@@ -212,7 +211,7 @@ class StateDatabase:
         )
         return cursor.fetchone()
 
-    def get_by_target_uid(self, target_uid: str) -> Optional[sqlite3.Row]:
+    def get_by_target_uid(self, target_uid: str) -> sqlite3.Row | None:
         """Get state record by target UID for this calendar pair."""
         cursor = self.conn.execute(
             "SELECT * FROM sync_state "

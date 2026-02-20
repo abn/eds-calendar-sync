@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Bidirectional calendar sync between work and personal calendars via EDS"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.13"
 dependencies = [
     "PyGObject",
     "typer[all]",
@@ -35,7 +35,7 @@ ruff = "*"
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [

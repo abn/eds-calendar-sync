@@ -2,8 +2,6 @@
 Evolution Data Server calendar connectivity wrapper.
 """
 
-from typing import Optional
-
 import gi
 
 gi.require_version("EDataServer", "1.2")
@@ -55,7 +53,7 @@ class EDSCalendarClient:
     def __init__(self, registry: EDataServer.SourceRegistry, calendar_uid: str):
         self.registry = registry
         self.calendar_uid = calendar_uid
-        self.client: Optional[ECal.Client] = None
+        self.client: ECal.Client | None = None
 
     def connect(self, timeout: int = 10):
         """Connect to the specified calendar in EDS."""
@@ -86,7 +84,7 @@ class EDSCalendarClient:
         except GLib.Error as e:
             raise CalendarSyncError(f"Failed to fetch events: {e.message}") from e
 
-    def create_event(self, component: ICalGLib.Component) -> Optional[str]:
+    def create_event(self, component: ICalGLib.Component) -> str | None:
         """Create a new event in the calendar."""
         if not self.client:
             raise CalendarSyncError("Client not connected")
@@ -122,7 +120,7 @@ class EDSCalendarClient:
         if not success:
             raise CalendarSyncError(f"Failed to remove event {uid}")
 
-    def get_event(self, uid: str) -> Optional[ICalGLib.Component]:
+    def get_event(self, uid: str) -> ICalGLib.Component | None:
         """Retrieve a single event by UID."""
         if not self.client:
             raise CalendarSyncError("Client not connected")

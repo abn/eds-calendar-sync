@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import Annotated
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -100,8 +99,8 @@ def _load_config_file(config_path: Path) -> dict[str, str]:
 
 
 def _build_config(
-    work_calendar: Optional[str],
-    personal_calendar: Optional[str],
+    work_calendar: str | None,
+    personal_calendar: str | None,
     to_personal: bool,
     to_work: bool,
     dry_run: bool,
@@ -227,11 +226,11 @@ def _run_sync(cfg: SyncConfig) -> None:
 # ---------------------------------------------------------------------------
 
 _WORK_OPT = Annotated[
-    Optional[str],
+    str | None,
     typer.Option("--work-calendar", "-w", help="Work calendar EDS UID (overrides config)"),
 ]
 _PERS_OPT = Annotated[
-    Optional[str],
+    str | None,
     typer.Option("--personal-calendar", "-p", help="Personal calendar EDS UID (overrides config)"),
 ]
 _TO_PERS = Annotated[bool, typer.Option("--to-personal", help="One-way: work → personal only")]
@@ -319,10 +318,10 @@ def clear(
 
 @app.command()
 def migrate(
-    old_work: Annotated[Optional[str], typer.Option(help="Old work calendar UID")] = None,
-    new_work: Annotated[Optional[str], typer.Option(help="New work calendar UID")] = None,
-    old_personal: Annotated[Optional[str], typer.Option(help="Old personal calendar UID")] = None,
-    new_personal: Annotated[Optional[str], typer.Option(help="New personal calendar UID")] = None,
+    old_work: Annotated[str | None, typer.Option(help="Old work calendar UID")] = None,
+    new_work: Annotated[str | None, typer.Option(help="New work calendar UID")] = None,
+    old_personal: Annotated[str | None, typer.Option(help="Old personal calendar UID")] = None,
+    new_personal: Annotated[str | None, typer.Option(help="New personal calendar UID")] = None,
     dry_run: _DRY_RUN = False,
 ) -> None:
     """Update calendar IDs in state DB after GOA reconnection."""
@@ -537,10 +536,10 @@ def calendars() -> None:
 def inspect(
     calendar_uid: Annotated[str, typer.Argument(help="Calendar UID to inspect")],
     title: Annotated[
-        Optional[str], typer.Option(help="Filter by SUMMARY substring (case-insensitive)")
+        str | None, typer.Option(help="Filter by SUMMARY substring (case-insensitive)")
     ] = None,
     uid: Annotated[
-        Optional[str], typer.Option(help="Filter by UID substring (case-insensitive)")
+        str | None, typer.Option(help="Filter by UID substring (case-insensitive)")
     ] = None,
     no_raw: Annotated[bool, typer.Option("--no-raw", help="Omit the raw iCal block")] = False,
     exceptions_only: Annotated[
