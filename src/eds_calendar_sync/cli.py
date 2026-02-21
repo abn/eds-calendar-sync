@@ -147,6 +147,11 @@ def _build_config(
 
 def _run_sync(cfg: SyncConfig) -> None:
     """Core sync runner: display panel, confirm, run, show results."""
+    from eds_calendar_sync.preflight import run_preflight_checks
+
+    if not run_preflight_checks(cfg, console):
+        raise typer.Exit(1)
+
     work_name, work_account, work_uid = get_calendar_display_info(cfg.work_calendar_id)
     personal_name, personal_account, personal_uid = get_calendar_display_info(
         cfg.personal_calendar_id
