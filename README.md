@@ -467,21 +467,37 @@ eds-calendar-sync sync --work-calendar WORK_UID --personal-calendar PERSONAL_UID
 
 ## Troubleshooting
 
-### Calendar Not Found
+### Preflight checks
+
+Before every sync, `sync`, `refresh`, and `clear` run a quick preflight that validates:
+
+1. **EDS registry reachable** — evolution-data-server is running
+2. **Calendar UIDs exist** — both UIDs resolve in EDS
+3. **Calendars connectable** — EDS can open a client session for each calendar
+4. **State DB accessible** — the parent directory is writable and, if the DB already exists, it is readable
+
+When any check fails you will see a panel like:
 
 ```
-Error: Calendar with UID 'xxx' not found in EDS
+╭─────────────── Preflight checks failed ───────────────╮
+│   ✗  Work calendar: UID not found: abc123             │
+│        → Run: eds-calendar-sync migrate               │
+│   ✗  Personal calendar: Connection failed: …          │
+│        → Account 'user@gmail.com' appears offline     │
+│          — check GNOME Online Accounts                │
+╰───────────────────────────────────────────────────────╯
 ```
 
-**Solution**: Run `eds-calendar-sync calendars` to verify the UID and ensure the calendar is enabled.
+The sync exits immediately so you can fix the problem before any changes are made.
 
-### Permission Errors
+Common causes and fixes:
 
-```
-Error: Failed to connect to calendar
-```
-
-**Solution**: Ensure Evolution Data Server is running and your accounts are properly configured in GNOME Calendar or Evolution.
+| Failing check | Likely cause | Fix |
+|---|---|---|
+| EDS registry unreachable | `evolution-data-server` not running | Start GNOME Calendar or run `evolution-data-server &` |
+| UID not found | Calendar was removed/re-added via GOA | Run `eds-calendar-sync migrate` |
+| Calendar offline | GOA account disconnected | Open **Settings → Online Accounts** and reconnect |
+| State DB not writable | Wrong permissions on `~/.local/share/` | Check directory permissions |
 
 ### Calendar Not Writable
 
@@ -502,6 +518,12 @@ This was a bug fixed in v1.0. Update to latest version. The fix ensures existing
 ### Spurious Modifications
 
 If sync keeps showing "Modified: N" when nothing changed, this was a bug fixed in v1.0. The tool now correctly tracks separate hashes for work and personal events.
+
+### "Modified" count after manually deleting a synced event
+
+If you delete a synced event directly from the personal (or work) calendar, the next sync will detect the missing event, silently recreate it, and count it as **Modified 1**. This is expected: the sync treats the source calendar as authoritative and restores the mirror. No warning is printed.
+
+To permanently remove a synced pair, delete the event from the **source** calendar (the one that originated it); the next sync will then remove the mirror and count it as **Deleted 1**.
 
 ### Cannot Prompt in Non-Interactive Mode
 

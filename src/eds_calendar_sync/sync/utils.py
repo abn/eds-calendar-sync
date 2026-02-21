@@ -6,8 +6,25 @@ import hashlib
 
 import gi
 
+gi.require_version("GLib", "2.0")
 gi.require_version("ICalGLib", "3.0")
+from gi.repository import GLib
 from gi.repository import ICalGLib
+
+# E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND = 1  (from e-cal-client-error-quark)
+_EDS_NOT_FOUND_CODE = 1
+_EDS_CLIENT_ERROR_DOMAIN = "e-cal-client-error-quark"
+
+
+def is_not_found_error(e: Exception) -> bool:
+    """Return True when EDS reports that a calendar object does not exist.
+
+    This distinguishes an externally-deleted event (which is harmless and
+    should be handled silently) from genuine modify/delete failures.
+    """
+    if isinstance(e, GLib.Error):
+        return e.code == _EDS_NOT_FOUND_CODE and _EDS_CLIENT_ERROR_DOMAIN in (e.domain or "")
+    return "object not found" in str(e).lower()
 
 
 def compute_hash(ical_string: str) -> str:

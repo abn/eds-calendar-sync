@@ -17,6 +17,7 @@ from eds_calendar_sync.models import SyncStats
 from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh_to_work
 from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import is_not_found_error
 from eds_calendar_sync.sync.utils import parse_component
 
 
@@ -117,14 +118,26 @@ def _process_updates_to_work(
         stats.modified += 1
         logger.debug(f"Updated event {personal_uid} in work calendar")
     except (GLib.Error, CalendarSyncError) as e:
-        # If modify fails, try recreating
-        logger.warning(f"Modify failed for {personal_uid}, attempting recreate: {e}")
+        # "Object not found" means the work event was deleted externally between
+        # syncs.  That is a normal occurrence; recreate it silently at DEBUG level.
+        # Any other modify failure is unexpected and warrants a WARNING.
+        if is_not_found_error(e):
+            logger.debug(
+                f"Work event {work_uid} no longer exists (externally deleted);"
+                f" recreating for personal event {personal_uid}"
+            )
+            already_gone = True
+        else:
+            logger.warning(f"Modify failed for {personal_uid}, attempting recreate: {e}")
+            already_gone = False
+
         try:
-            # First delete the old event
-            try:
-                work_client.remove_event(work_uid)
-            except Exception:
-                pass  # May already be gone
+            if not already_gone:
+                # Try to remove the stale copy before replacing it
+                try:
+                    work_client.remove_event(work_uid)
+                except Exception:
+                    pass  # May already be gone
 
             # Create new with fresh UUID (will be rewritten by server)
             new_uid = str(uuid.uuid4())
@@ -182,9 +195,16 @@ def _process_deletions_to_work(
                 work_client.remove_event(work_uid)
                 logger.debug(f"Successfully deleted event {personal_uid} (work: {work_uid})")
             except (GLib.Error, CalendarSyncError) as e:
-                logger.error(f"Failed to delete {work_uid}: {e}")
-                stats.errors += 1
-                continue
+                if is_not_found_error(e):
+                    # Already gone externally — state DB cleanup still needed
+                    logger.debug(
+                        f"Work event {work_uid} already gone (externally deleted);"
+                        f" cleaning up state for personal event {personal_uid}"
+                    )
+                else:
+                    logger.error(f"Failed to delete {work_uid}: {e}")
+                    stats.errors += 1
+                    continue
 
             state_db.delete_by_pair(work_uid, personal_uid)
             stats.deleted += 1
