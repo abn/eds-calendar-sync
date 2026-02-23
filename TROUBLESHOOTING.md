@@ -129,7 +129,8 @@ These are Exchange-specific rejections. Common causes and what the tool does aut
 | Exchange Error | Cause | Handling |
 |---|---|---|
 | `ExpandSeries can only be performed against a series` | RECURRENCE-ID present (exception occurrence without master series in target) | Stripped from sanitized event |
-| `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, empty RRULE+EXDATE series, or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped |
+| `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, or a recurring series where every RRULE occurrence is covered by EXDATE (Exchange rejects creating an empty series), or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped before creation |
+| `ErrorItemNotFound` (create) — edge case | DTSTART has a timezone (e.g. `TZID=Europe/Berlin`) but UNTIL in the RRULE is a **date-only** value; libical's recurrence iterator does not reliably stop at UNTIL, generating spurious post-UNTIL occurrences that slip past the empty-series check | Fixed: UNTIL is now extracted from the RRULE and used to cap the iterator explicitly |
 
 If errors persist, run with `--verbose` (global flag) — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
 

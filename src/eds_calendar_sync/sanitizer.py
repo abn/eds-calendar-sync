@@ -175,6 +175,22 @@ class EventSanitizer:
 
                             # Find first RRULE occurrence not in EXDATE.
                             _rule = _rrule_prop.get_rrule()
+                            # Extract UNTIL for explicit bounding — same fix
+                            # as has_valid_occurrences: when DTSTART has a
+                            # TZID and UNTIL is date-only, libical may emit
+                            # occurrences past UNTIL.  Guard against advancing
+                            # DTSTART beyond the series end.
+                            _adv_until_str = None
+                            try:
+                                _adv_until_t = _rule.get_until()
+                                if _adv_until_t and not _adv_until_t.is_null_time():
+                                    _adv_until_str = (
+                                        f"{_adv_until_t.get_year():04d}"
+                                        f"{_adv_until_t.get_month():02d}"
+                                        f"{_adv_until_t.get_day():02d}"
+                                    )
+                            except Exception:
+                                pass
                             _it = ICalGLib.RecurIterator.new(_rule, _dts)
                             for _ in range(500):
                                 _occ = _it.next()
@@ -185,6 +201,8 @@ class EventSanitizer:
                                     f"{_occ.get_month():02d}"
                                     f"{_occ.get_day():02d}"
                                 )
+                                if _adv_until_str and _occ_date > _adv_until_str:
+                                    break  # Don't advance DTSTART past UNTIL
                                 if _occ_date not in _exdates:
                                     # Build new DTSTART / DTEND strings, preserving TZID.
                                     _tzid_param = _dts_prop.get_first_parameter(

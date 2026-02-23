@@ -15,15 +15,28 @@ from gi.repository import ICalGLib
 _EDS_NOT_FOUND_CODE = 1
 _EDS_CLIENT_ERROR_DOMAIN = "e-cal-client-error-quark"
 
+# The M365 backend (e-m365-error-quark) embeds the Exchange EWS error name in the
+# message string rather than mapping it to a fixed quark code.
+_M365_ERROR_DOMAIN = "e-m365-error-quark"
+_M365_NOT_FOUND_MSG = "ErrorItemNotFound"
+
 
 def is_not_found_error(e: Exception) -> bool:
     """Return True when EDS reports that a calendar object does not exist.
 
     This distinguishes an externally-deleted event (which is harmless and
     should be handled silently) from genuine modify/delete failures.
+
+    Covers both the generic EDS client quark (e-cal-client-error-quark code 1)
+    and the M365 backend quark (e-m365-error-quark, which embeds the Exchange
+    error name "ErrorItemNotFound" in the message text).
     """
     if isinstance(e, GLib.Error):
-        return e.code == _EDS_NOT_FOUND_CODE and _EDS_CLIENT_ERROR_DOMAIN in (e.domain or "")
+        domain = e.domain or ""
+        if e.code == _EDS_NOT_FOUND_CODE and _EDS_CLIENT_ERROR_DOMAIN in domain:
+            return True
+        if _M365_ERROR_DOMAIN in domain and _M365_NOT_FOUND_MSG in (e.message or ""):
+            return True
     return "object not found" in str(e).lower()
 
 
@@ -111,12 +124,29 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
     try:
         rule = rrule_prop.get_rrule()
         dtstart = check.get_dtstart()
+
+        # When DTSTART carries a TZID (datetime) but UNTIL in the RRULE is
+        # a date-only value, libical's RecurIterator does not reliably stop
+        # at UNTIL — it emits spurious occurrences past the series end.
+        # Extract UNTIL explicitly and cap the loop ourselves.
+        until_str = None
+        try:
+            until_t = rule.get_until()
+            if until_t and not until_t.is_null_time():
+                until_str = (
+                    f"{until_t.get_year():04d}{until_t.get_month():02d}{until_t.get_day():02d}"
+                )
+        except Exception:
+            pass
+
         it = ICalGLib.RecurIterator.new(rule, dtstart)
         for _ in range(500):
             occ = it.next()
             if occ is None or occ.is_null_time():
                 break
             occ_key = f"{occ.get_year():04d}{occ.get_month():02d}{occ.get_day():02d}"
+            if until_str and occ_key > until_str:
+                break  # Past UNTIL — no further occurrences in this series
             if occ_key not in exdates:
                 return True  # Found at least one valid occurrence
     except Exception:

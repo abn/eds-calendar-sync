@@ -44,6 +44,7 @@ def _process_creates(
         stats.added += 1
         return
 
+    sanitized = None
     try:
         sanitized = EventSanitizer.sanitize(
             ical_str,
@@ -78,7 +79,7 @@ def _process_creates(
         stats.added += 1
         logger.debug(f"Created event {work_uid} as {personal_uid}")
     except (GLib.Error, CalendarSyncError) as e:
-        if "sanitized" in dir():
+        if sanitized is not None:
             logger.warning(
                 f"Sanitized iCal for failed event {work_uid}:\n{sanitized.as_ical_string()}"
             )
