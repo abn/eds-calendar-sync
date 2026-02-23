@@ -3,6 +3,7 @@ Stateless event-inspection helpers.
 """
 
 import hashlib
+from typing import TYPE_CHECKING
 
 import gi
 
@@ -10,6 +11,10 @@ gi.require_version("GLib", "2.0")
 gi.require_version("ICalGLib", "3.0")
 from gi.repository import GLib
 from gi.repository import ICalGLib
+
+if TYPE_CHECKING:
+    from eds_calendar_sync.db import StateDatabase
+    from eds_calendar_sync.eds_client import EDSCalendarClient
 
 # E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND = 1  (from e-cal-client-error-quark)
 _EDS_NOT_FOUND_CODE = 1
@@ -172,3 +177,63 @@ def is_free_time(comp: ICalGLib.Component) -> bool:
     except (AttributeError, TypeError):
         val = transp_prop.get_value_as_string() or ""
         return val.strip().upper() == "TRANSPARENT"
+
+
+def compute_source_fingerprint(source_uid: str) -> str:
+    """Return the 16-char hex SHA-256 fingerprint of source_uid."""
+    return hashlib.sha256(source_uid.encode()).hexdigest()[:16]
+
+
+def build_orphan_index(
+    target_client: "EDSCalendarClient",
+    state_db: "StateDatabase",
+    logger,
+) -> dict[str, str]:
+    """Scan target calendar for managed events not recorded in the state DB.
+
+    Returns a dict mapping source_fingerprint → target_uid for orphaned
+    managed events (events created by a previous sync run that crashed
+    before the DB record was committed).
+
+    Events that already have a state record are excluded from the result.
+    Events without a fingerprint (created before Fix 3 was deployed) are
+    skipped because they cannot be linked back to a source event.
+    """
+    from eds_calendar_sync.sanitizer import EventSanitizer
+
+    orphans: dict[str, str] = {}
+    try:
+        all_events = target_client.get_all_events()
+    except Exception as e:
+        logger.warning(f"Orphan scan: could not fetch events: {e}")
+        return orphans
+
+    for obj in all_events:
+        comp = parse_component(obj)
+        if not EventSanitizer.is_managed_event(comp):
+            continue
+
+        fingerprint = EventSanitizer.get_source_fingerprint(comp)
+        if not fingerprint:
+            continue  # Pre-Fix-3 event: no fingerprint, cannot link
+
+        target_uid = comp.get_uid()
+        if not target_uid:
+            continue
+
+        # Skip if already tracked in state DB.
+        # Managed events in the personal calendar are stored as target_uid;
+        # managed events in the work calendar are stored as source_uid.
+        # Check both to handle either calendar.
+        if (
+            state_db.get_by_target_uid(target_uid) is not None
+            or state_db.get_by_source_uid(target_uid) is not None
+        ):
+            continue
+
+        orphans[fingerprint] = target_uid
+        logger.debug(f"Orphan scan: found untracked managed event {target_uid} (fp={fingerprint})")
+
+    if orphans:
+        logger.info(f"Orphan scan: found {len(orphans)} untracked managed event(s) to recover")
+    return orphans
