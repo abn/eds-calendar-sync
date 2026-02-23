@@ -106,14 +106,22 @@ def run_preflight_checks(cfg: SyncConfig, console: Console) -> bool:
             try:
                 conn = sqlite3.connect(db_path)
                 conn.execute("SELECT 1")
+                # Also verify write access: BEGIN IMMEDIATE acquires a write lock
+                # and requires creating a journal file in the same directory.
+                # This catches ProtectHome=read-only with a file-only ReadWritePaths.
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("ROLLBACK")
                 conn.close()
             except sqlite3.Error as e:
-                logger.error("State DB not readable (%s): %s", db_path, e)
+                logger.error("State DB not readable/writable (%s): %s", db_path, e)
                 issues.append(
                     (
                         "State database",
                         f"{db_path}: {e}",
-                        f"Check permissions or remove corrupt file: {db_path}",
+                        f"Check permissions on {db_path.parent} "
+                        f"(journal files must be creatable alongside the DB); "
+                        f"if using a systemd service, ensure ReadWritePaths "
+                        f"covers the parent directory, not just the file",
                     )
                 )
 

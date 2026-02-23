@@ -550,6 +550,38 @@ journalctl --user -u eds-calendar-sync.service -n 100
 # 4. EDS not running - check GNOME Calendar is set up
 ```
 
+### State Database Error: "unable to open database file"
+
+```
+ERROR  Failed to update/recreate event ...: State database error
+       (/home/user/.local/share/eds-calendar-sync-state.db): unable to open database file
+```
+
+This error occurs when the service can **read** the database but cannot **write** to it. SQLite
+needs to create journal or WAL files (e.g. `eds-calendar-sync-state.db-journal`) in the **same
+directory** as the database file when committing a write. If only the file itself is writable (not
+its parent directory), reads succeed but writes fail mid-sync.
+
+**Cause**: The bundled service file uses `ProtectHome=read-only` with `ReadWritePaths` pointing at
+the DB file. Older versions of the service file specified the file path directly instead of the
+parent directory:
+
+```ini
+# Wrong — journal files cannot be created
+ReadWritePaths=%h/.local/share/eds-calendar-sync-state.db ...
+
+# Correct — parent directory gives SQLite room to create auxiliary files
+ReadWritePaths=%h/.local/share %h/.cache/evolution
+```
+
+**Fix**: Update your installed service file:
+
+```bash
+cp systemd/eds-calendar-sync.service ~/.config/systemd/user/eds-calendar-sync.service
+systemctl --user daemon-reload
+systemctl --user restart eds-calendar-sync.service
+```
+
 ### Exchange/M365 Create Errors
 
 If you see errors like:

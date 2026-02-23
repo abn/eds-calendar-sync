@@ -1,6 +1,6 @@
 [Unit]
 Description=EDS Calendar Sync Timer (every 15 minutes)
-Documentation=https://github.com/your-repo/eds-calendar-sync
+Documentation=https://github.com/abn/eds-calendar-sync
 
 [Timer]
 # Run 2 minutes after boot (wait for network and EDS to be ready)

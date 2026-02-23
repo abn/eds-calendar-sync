@@ -30,7 +30,7 @@ RestartSec=5m
 # Security hardening
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/eds-calendar-sync-state.db %h/.cache/evolution %h/.local/share/evolution
+ReadWritePaths=%h/.local/share %h/.cache/evolution
 PrivateTmp=yes
 NoNewPrivileges=yes
 
