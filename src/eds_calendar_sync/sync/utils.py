@@ -3,6 +3,7 @@ Stateless event-inspection helpers.
 """
 
 import hashlib
+import re
 
 import gi
 
@@ -10,6 +11,11 @@ gi.require_version("GLib", "2.0")
 gi.require_version("ICalGLib", "3.0")
 from gi.repository import GLib
 from gi.repository import ICalGLib
+
+# Regex to extract the UNTIL date from an RRULE string as YYYYMMDD.
+# Works for both date-only (UNTIL=20260316) and UTC datetime
+# (UNTIL=20260316T100000Z) — we only need the date portion.
+_RRULE_UNTIL_RE = re.compile(r"UNTIL=(\d{8})")
 
 # E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND = 1  (from e-cal-client-error-quark)
 _EDS_NOT_FOUND_CODE = 1
@@ -128,14 +134,13 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         # When DTSTART carries a TZID (datetime) but UNTIL in the RRULE is
         # a date-only value, libical's RecurIterator does not reliably stop
         # at UNTIL — it emits spurious occurrences past the series end.
-        # Extract UNTIL explicitly and cap the loop ourselves.
+        # Parse UNTIL from the raw RRULE string — more reliable than
+        # rule.get_until() which may silently fail in some libical-glib builds.
         until_str = None
         try:
-            until_t = rule.get_until()
-            if until_t and not until_t.is_null_time():
-                until_str = (
-                    f"{until_t.get_year():04d}{until_t.get_month():02d}{until_t.get_day():02d}"
-                )
+            m = _RRULE_UNTIL_RE.search(rrule_prop.get_value_as_string() or "")
+            if m:
+                until_str = m.group(1)
         except Exception:
             pass
 

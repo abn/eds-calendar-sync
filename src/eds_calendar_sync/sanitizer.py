@@ -3,6 +3,7 @@ iCal event sanitization — strips sensitive data before syncing.
 """
 
 import datetime
+import re
 
 import gi
 
@@ -10,6 +11,11 @@ gi.require_version("ICalGLib", "3.0")
 gi.require_version("GLib", "2.0")
 from gi.repository import GLib  # noqa: F401 (GLib kept for version side-effect)
 from gi.repository import ICalGLib  # noqa: F401 (GLib kept for version side-effect)
+
+# Regex to extract the UNTIL date from an RRULE string as YYYYMMDD.
+# Works for both date-only (UNTIL=20260316) and UTC datetime
+# (UNTIL=20260316T100000Z) — we only need the date portion.
+_RRULE_UNTIL_RE = re.compile(r"UNTIL=(\d{8})")
 
 
 class EventSanitizer:
@@ -175,20 +181,20 @@ class EventSanitizer:
 
                             # Find first RRULE occurrence not in EXDATE.
                             _rule = _rrule_prop.get_rrule()
-                            # Extract UNTIL for explicit bounding — same fix
+                            # Parse UNTIL for explicit bounding — same fix
                             # as has_valid_occurrences: when DTSTART has a
                             # TZID and UNTIL is date-only, libical may emit
                             # occurrences past UNTIL.  Guard against advancing
-                            # DTSTART beyond the series end.
+                            # DTSTART beyond the series end.  Parse from the
+                            # raw string rather than rule.get_until() which
+                            # may silently fail in some libical-glib builds.
                             _adv_until_str = None
                             try:
-                                _adv_until_t = _rule.get_until()
-                                if _adv_until_t and not _adv_until_t.is_null_time():
-                                    _adv_until_str = (
-                                        f"{_adv_until_t.get_year():04d}"
-                                        f"{_adv_until_t.get_month():02d}"
-                                        f"{_adv_until_t.get_day():02d}"
-                                    )
+                                _adv_m = _RRULE_UNTIL_RE.search(
+                                    _rrule_prop.get_value_as_string() or ""
+                                )
+                                if _adv_m:
+                                    _adv_until_str = _adv_m.group(1)
                             except Exception:
                                 pass
                             _it = ICalGLib.RecurIterator.new(_rule, _dts)
