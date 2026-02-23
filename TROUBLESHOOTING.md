@@ -120,8 +120,8 @@ systemctl --user restart eds-calendar-sync.service
 If you see errors like:
 
 ```
-ERROR: Failed to create event ...: e-m365-error-quark: Cannot create calendar object: ErrorItemNotFound (2)
-ERROR: Failed to create event ...: ExpandSeries can only be performed against a series. (400)
+ERROR  Failed to create personal event from ...: e-m365-error-quark: Cannot create calendar object: ErrorItemNotFound (2)
+ERROR  Failed to create event ...: ExpandSeries can only be performed against a series. (400)
 ```
 
 These are Exchange-specific rejections. Common causes and what the tool does automatically:
@@ -130,9 +130,9 @@ These are Exchange-specific rejections. Common causes and what the tool does aut
 |---|---|---|
 | `ExpandSeries can only be performed against a series` | RECURRENCE-ID present (exception occurrence without master series in target) | Stripped from sanitized event |
 | `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, or a recurring series where every RRULE occurrence is covered by EXDATE (Exchange rejects creating an empty series), or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped before creation |
-| `ErrorItemNotFound` (create) — edge case | DTSTART has a timezone (e.g. `TZID=Europe/Berlin`) but UNTIL in the RRULE is a **date-only** value; libical's recurrence iterator does not reliably stop at UNTIL, generating spurious post-UNTIL occurrences that slip past the empty-series check | Fixed: UNTIL is now extracted from the RRULE and used to cap the iterator explicitly |
+| `ErrorItemNotFound` (create) — edge case | DTSTART has a timezone (e.g. `TZID=Europe/Berlin`) but UNTIL in the RRULE is a **date-only** value; libical's recurrence iterator does not reliably stop at UNTIL, generating spurious post-UNTIL occurrences that slip past the empty-series check | Fixed: UNTIL is extracted from the raw iCal string and used to cap the iterator; a timezone-free (floating) copy of DTSTART is used to avoid TZID resolution failures |
 
-If errors persist, run with `--verbose` (global flag) — the full sanitized iCal is printed at `WARNING` level for any failed event, showing exactly which remaining property is causing the rejection.
+If errors persist, run with `--verbose` (global flag) — the sanitized iCal is printed before each create attempt, showing exactly which properties will be sent to Exchange.
 
 ## Calendar UIDs Changed After GOA Reconnection
 
