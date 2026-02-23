@@ -3,6 +3,7 @@ iCal event sanitization — strips sensitive data before syncing.
 """
 
 import datetime
+import hashlib
 import re
 
 import gi
@@ -51,6 +52,17 @@ class EventSanitizer:
             component.remove_component(subcomp)
             subcomp = component.get_first_component(comp_kind)
 
+    @staticmethod
+    def get_source_fingerprint(component: ICalGLib.Component) -> str | None:
+        """Extract the 16-char source fingerprint from CALENDAR-SYNC-SRC-* categories, or None."""
+        prop = component.get_first_property(ICalGLib.PropertyKind.CATEGORIES_PROPERTY)
+        while prop:
+            categories = prop.get_categories() or ""
+            if categories.startswith("CALENDAR-SYNC-SRC-"):
+                return categories[len("CALENDAR-SYNC-SRC-") :]
+            prop = component.get_next_property(ICalGLib.PropertyKind.CATEGORIES_PROPERTY)
+        return None
+
     @classmethod
     def sanitize(
         cls,
@@ -58,6 +70,7 @@ class EventSanitizer:
         new_uid: str,
         mode: str = "normal",
         keep_reminders: bool = False,
+        source_uid: str | None = None,
     ) -> ICalGLib.Component:
         """
         Parse an iCal string, replace UID, and strip sensitive data.
@@ -70,6 +83,9 @@ class EventSanitizer:
             keep_reminders: When True, preserve VALARM sub-components.
                   Defaults to False — reminders are stripped to prevent
                   duplicate notifications on the target calendar.
+            source_uid: When provided, a SHA-256 fingerprint of this UID is
+                  embedded as a CATEGORIES:CALENDAR-SYNC-SRC-<hex16> property.
+                  Used for orphan recovery after a crash-before-commit.
 
         Returns:
             Sanitized ICalGLib.Component ready for target calendar
@@ -345,6 +361,14 @@ class EventSanitizer:
             cls._remove_all_properties(event, ICalGLib.PropertyKind.CATEGORIES_PROPERTY)
             categories_prop = ICalGLib.Property.new_categories("CALENDAR-SYNC-MANAGED")
             event.add_property(categories_prop)
+
+            # Embed source UID fingerprint for orphan recovery after a crash.
+            # A 16-char hex SHA-256 prefix is sufficient to uniquely identify
+            # the source event and survives Exchange/Google round-trips.
+            if source_uid is not None:
+                fingerprint = hashlib.sha256(source_uid.encode()).hexdigest()[:16]
+                src_prop = ICalGLib.Property.new_categories(f"CALENDAR-SYNC-SRC-{fingerprint}")
+                event.add_property(src_prop)
 
             # Mark event as private so other users with read access to the
             # target calendar cannot see its title or details.

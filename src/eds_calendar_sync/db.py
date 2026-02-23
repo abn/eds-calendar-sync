@@ -249,7 +249,13 @@ class StateDatabase:
             "(work_calendar_id, personal_calendar_id, "
             " source_uid, target_uid, source_hash, target_hash, "
             " origin, created_at, last_sync_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'source', ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, 'source', ?, ?) "
+            "ON CONFLICT(work_calendar_id, personal_calendar_id, source_uid) "
+            "DO UPDATE SET "
+            "    target_uid   = excluded.target_uid, "
+            "    source_hash  = excluded.source_hash, "
+            "    target_hash  = excluded.target_hash, "
+            "    last_sync_at = excluded.last_sync_at",
             (
                 self.work_calendar_id,
                 self.personal_calendar_id,
@@ -265,14 +271,27 @@ class StateDatabase:
     def insert_bidirectional(
         self, source_uid: str, target_uid: str, source_hash: str, target_hash: str, origin: str
     ):
-        """Insert new bidirectional sync record for this calendar pair."""
+        """Insert new bidirectional sync record for this calendar pair.
+
+        Uses upsert semantics: if a record with the same
+        (work_calendar_id, personal_calendar_id, source_uid) already exists
+        (e.g. from a previous crash-before-commit), the mutable fields are
+        updated rather than raising a UNIQUE constraint error.  created_at is
+        preserved on conflict.
+        """
         timestamp = int(time.time())
         self._execute(
             "INSERT INTO sync_state "
             "(work_calendar_id, personal_calendar_id, "
             " source_uid, target_uid, source_hash, target_hash, "
             " origin, created_at, last_sync_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(work_calendar_id, personal_calendar_id, source_uid) "
+            "DO UPDATE SET "
+            "    target_uid   = excluded.target_uid, "
+            "    source_hash  = excluded.source_hash, "
+            "    target_hash  = excluded.target_hash, "
+            "    last_sync_at = excluded.last_sync_at",
             (
                 self.work_calendar_id,
                 self.personal_calendar_id,

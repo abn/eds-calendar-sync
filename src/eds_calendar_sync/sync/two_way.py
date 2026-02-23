@@ -18,7 +18,9 @@ from eds_calendar_sync.models import SyncConfig
 from eds_calendar_sync.models import SyncStats
 from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh_two_way
+from eds_calendar_sync.sync.utils import build_orphan_index
 from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import compute_source_fingerprint
 from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
@@ -33,6 +35,7 @@ def _process_new_work_event(
     work_comp: ICalGLib.Component,
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
+    orphan_index: dict[str, str] | None = None,
 ):
     """Handle creation of new event in personal calendar from work."""
     personal_uid = str(uuid.uuid4())
@@ -43,12 +46,33 @@ def _process_new_work_event(
         stats.added += 1
         return
 
+    # Check orphan index: a previous crash may have created this event in the
+    # personal calendar without committing the DB record.
+    if orphan_index is not None:
+        fingerprint = compute_source_fingerprint(work_uid)
+        if fingerprint in orphan_index:
+            existing_uid = orphan_index[fingerprint]
+            logger.info(f"Recovering orphan: {work_uid} → {existing_uid}")
+            work_hash = compute_hash(work_ical)
+            recovered = personal_client.get_event(existing_uid)
+            if recovered:
+                personal_hash = compute_hash(recovered.as_ical_string())
+            else:
+                personal_hash = work_hash
+            state_db.insert_bidirectional(
+                work_uid, existing_uid, work_hash, personal_hash, "source"
+            )
+            state_db.commit()
+            stats.added += 1
+            return
+
     try:
         sanitized = EventSanitizer.sanitize(
             work_ical,
             personal_uid,
             mode="normal",
             keep_reminders=config.keep_reminders,
+            source_uid=work_uid,
         )
 
         if config.verbose:
@@ -70,6 +94,7 @@ def _process_new_work_event(
             personal_hash = compute_hash(sanitized.as_ical_string())
 
         state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "source")
+        state_db.commit()
         stats.added += 1
         logger.debug(f"Created personal event {personal_uid} from work {work_uid}")
     except (GLib.Error, CalendarSyncError) as e:
@@ -85,6 +110,7 @@ def _process_new_personal_event(
     personal_comp: ICalGLib.Component,
     work_client: EDSCalendarClient,
     state_db: StateDatabase,
+    orphan_index: dict[str, str] | None = None,
 ):
     """Handle creation of new event in work calendar from personal."""
     work_uid = str(uuid.uuid4())
@@ -95,12 +121,33 @@ def _process_new_personal_event(
         stats.added += 1
         return
 
+    # Check orphan index: a previous crash may have created this event in the
+    # work calendar without committing the DB record.
+    if orphan_index is not None:
+        fingerprint = compute_source_fingerprint(personal_uid)
+        if fingerprint in orphan_index:
+            existing_uid = orphan_index[fingerprint]
+            logger.info(f"Recovering orphan: {personal_uid} → {existing_uid}")
+            personal_hash = compute_hash(personal_ical)
+            recovered = work_client.get_event(existing_uid)
+            if recovered:
+                work_hash = compute_hash(recovered.as_ical_string())
+            else:
+                work_hash = personal_hash
+            state_db.insert_bidirectional(
+                existing_uid, personal_uid, work_hash, personal_hash, "target"
+            )
+            state_db.commit()
+            stats.added += 1
+            return
+
     try:
         sanitized = EventSanitizer.sanitize(
             personal_ical,
             work_uid,
             mode="busy",
             keep_reminders=config.keep_reminders,
+            source_uid=personal_uid,
         )
 
         if config.verbose:
@@ -122,6 +169,7 @@ def _process_new_personal_event(
             work_hash = compute_hash(sanitized.as_ical_string())
 
         state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "target")
+        state_db.commit()
         stats.added += 1
         logger.debug(f"Created work event {work_uid} from personal {personal_uid}")
     except (GLib.Error, CalendarSyncError) as e:
@@ -156,6 +204,7 @@ def _process_sync_pair(
         logger.debug(f"Both events deleted: {work_uid} <-> {personal_uid}")
         if not config.dry_run:
             state_db.delete_by_pair(work_uid, personal_uid)
+            state_db.commit()
         return
 
     if not work_exists:
@@ -178,6 +227,7 @@ def _process_sync_pair(
             # Clean up state
             if not config.dry_run:
                 state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.commit()
         else:
             # Personal was authoritative → work was deleted externally; recreate it.
             # (work_uid is already in work_uids_processed after this call returns,
@@ -189,6 +239,7 @@ def _process_sync_pair(
                 stats.added += 1
             else:
                 state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.commit()
                 _process_new_personal_event(
                     config,
                     stats,
@@ -220,6 +271,7 @@ def _process_sync_pair(
             # Clean up state
             if not config.dry_run:
                 state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.commit()
         else:
             # Work was authoritative → personal was deleted externally; recreate it.
             # (personal_uid is already in personal_uids_processed after this call
@@ -233,6 +285,7 @@ def _process_sync_pair(
                 stats.added += 1
             else:
                 state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.commit()
                 _process_new_work_event(
                     config,
                     stats,
@@ -292,6 +345,7 @@ def _process_sync_pair(
                         personal_uid,
                         mode="normal",
                         keep_reminders=config.keep_reminders,
+                        source_uid=work_uid,
                     )
                     personal_client.modify_event(sanitized)
 
@@ -309,6 +363,7 @@ def _process_sync_pair(
                     state_db.update_hashes(
                         work_uid, personal_uid, current_work_hash, new_personal_hash
                     )
+                    state_db.commit()
                     stats.modified += 1
                     logger.debug(
                         f"Updated personal {personal_uid} from work {work_uid} ({reason_str})"
@@ -344,6 +399,7 @@ def _process_sync_pair(
                         work_uid,
                         mode="busy",
                         keep_reminders=config.keep_reminders,
+                        source_uid=personal_uid,
                     )
                     work_client.modify_event(sanitized)
 
@@ -361,6 +417,7 @@ def _process_sync_pair(
                     state_db.update_hashes(
                         work_uid, personal_uid, new_work_hash, current_personal_hash
                     )
+                    state_db.commit()
                     stats.modified += 1
                     logger.debug(
                         f"Updated work {work_uid} from personal {personal_uid} ({reason_str})"
@@ -386,6 +443,13 @@ def run_two_way(
 
         logger.info("Loading sync state...")
         state_records = state_db.get_all_state_bidirectional()
+
+        # Pre-sync orphan scans: find managed events in each calendar that
+        # lack a DB record (created by a previous run that crashed before commit).
+        logger.info("Scanning personal calendar for orphaned managed events...")
+        personal_orphan_index = build_orphan_index(personal_client, state_db, logger)
+        logger.info("Scanning work calendar for orphaned managed events...")
+        work_orphan_index = build_orphan_index(work_client, state_db, logger)
 
         # Fetch all events from both calendars
         logger.info("Fetching work events...")
@@ -456,7 +520,14 @@ def run_two_way(
                     logger.debug(f"Skipping empty recurring work event: {work_uid}")
                     continue
                 _process_new_work_event(
-                    config, stats, logger, work_uid, work_comp, personal_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    work_uid,
+                    work_comp,
+                    personal_client,
+                    state_db,
+                    orphan_index=personal_orphan_index,
                 )
 
         # Phase 3: Process new personal events (not yet synced)
@@ -469,7 +540,14 @@ def run_two_way(
                     logger.debug(f"Skipping managed personal event: {personal_uid}")
                     continue
                 _process_new_personal_event(
-                    config, stats, logger, personal_uid, personal_comp, work_client, state_db
+                    config,
+                    stats,
+                    logger,
+                    personal_uid,
+                    personal_comp,
+                    work_client,
+                    state_db,
+                    orphan_index=work_orphan_index,
                 )
 
         # Commit changes
