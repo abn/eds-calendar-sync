@@ -3,9 +3,12 @@ Stateless event-inspection helpers.
 """
 
 import hashlib
+import logging
 import re
 
 import gi
+
+_logger = logging.getLogger(__name__)
 
 gi.require_version("GLib", "2.0")
 gi.require_version("ICalGLib", "3.0")
@@ -132,11 +135,19 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         prop = check.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
 
     if not exdates:
+        # Fallback: parse the component's iCal string.  Use the top-level
+        # comp (VCALENDAR when available) rather than the child VEVENT check
+        # — calling as_ical_string() on a child component obtained via
+        # get_first_component() may raise or return an empty string in some
+        # libical-glib builds, silently defeating the regex search.
         try:
-            for m in _EXDATE_DATE_RE.finditer(check.as_ical_string() or ""):
+            for m in _EXDATE_DATE_RE.finditer(comp.as_ical_string() or ""):
                 exdates.add(m.group(1))
         except Exception:
             pass
+
+    uid_for_log = check.get_uid() if check else "?"
+    _logger.debug("has_valid_occurrences: uid=%s exdates=%s", uid_for_log, exdates)
 
     if not exdates:
         return True  # No exclusions → series has occurrences
@@ -150,17 +161,38 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         # When DTSTART carries a TZID (datetime) but UNTIL in the RRULE is
         # a date-only value, libical's RecurIterator does not reliably stop
         # at UNTIL — it emits spurious occurrences past the series end.
-        # Parse UNTIL from the component's iCal string — avoids ICalGLib
-        # property accessor methods that may silently fail in some builds.
+        # Parse UNTIL from the top-level comp string (same rationale as the
+        # EXDATE fallback above: child as_ical_string() may silently fail).
         until_str = None
         try:
-            m = _RRULE_UNTIL_RE.search(check.as_ical_string() or "")
+            m = _RRULE_UNTIL_RE.search(comp.as_ical_string() or "")
             if m:
                 until_str = m.group(1)
         except Exception:
             pass
 
-        it = ICalGLib.RecurIterator.new(rule, dtstart)
+        _logger.debug("has_valid_occurrences: until_str=%s", until_str)
+
+        # Use a floating (timezone-free) copy of dtstart for RecurIterator.
+        # If dtstart carries a TZID and that timezone is not in libical's
+        # built-in database, RecurIterator.new() may raise, which the outer
+        # except clause would catch and convert into an incorrect True return.
+        # A floating copy has no timezone and always succeeds; we compare
+        # only YYYYMMDD strings so timezone precision is not needed here.
+        try:
+            _y = dtstart.get_year()
+            _mo = dtstart.get_month()
+            _d = dtstart.get_day()
+            _h = dtstart.get_hour()
+            _mi = dtstart.get_minute()
+            _s = dtstart.get_second()
+            dtstart_for_iter = ICalGLib.Time.new_from_string(
+                f"{_y:04d}{_mo:02d}{_d:02d}T{_h:02d}{_mi:02d}{_s:02d}"
+            )
+        except Exception:
+            dtstart_for_iter = dtstart
+
+        it = ICalGLib.RecurIterator.new(rule, dtstart_for_iter)
         for _ in range(500):
             occ = it.next()
             if occ is None or occ.is_null_time():
@@ -169,10 +201,16 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
             if until_str and occ_key > until_str:
                 break  # Past UNTIL — no further occurrences in this series
             if occ_key not in exdates:
+                _logger.debug(
+                    "has_valid_occurrences: found valid occurrence %s (not in exdates)",
+                    occ_key,
+                )
                 return True  # Found at least one valid occurrence
-    except Exception:
+    except Exception as _e:
+        _logger.debug("has_valid_occurrences: iterator error: %s", _e)
         return True  # On any API error assume valid — don't silently skip
 
+    _logger.debug("has_valid_occurrences: uid=%s is an empty series", uid_for_log)
     return False  # Every expanded occurrence is in EXDATE
 
 

@@ -199,14 +199,29 @@ class EventSanitizer:
                             # may silently fail in some libical-glib builds.
                             _adv_until_str = None
                             try:
-                                _adv_m = _RRULE_UNTIL_RE.search(
-                                    _rrule_prop.get_value_as_string() or ""
-                                )
+                                # Parse UNTIL from comp.as_ical_string() (the
+                                # root component string) rather than from the
+                                # RRULE property accessor, which may silently
+                                # fail in some libical-glib builds.  comp is
+                                # accessible from the enclosing sanitize scope.
+                                _adv_m = _RRULE_UNTIL_RE.search(comp.as_ical_string() or "")
                                 if _adv_m:
                                     _adv_until_str = _adv_m.group(1)
                             except Exception:
                                 pass
-                            _it = ICalGLib.RecurIterator.new(_rule, _dts)
+                            # Use a floating (timezone-free) copy of _dts to
+                            # avoid TZID resolution failures in RecurIterator
+                            # (same fix as in has_valid_occurrences).
+                            try:
+                                _dts_fl = ICalGLib.Time.new_from_string(
+                                    f"{_dts.get_year():04d}{_dts.get_month():02d}"
+                                    f"{_dts.get_day():02d}"
+                                    f"T{_dts.get_hour():02d}{_dts.get_minute():02d}"
+                                    f"{_dts.get_second():02d}"
+                                )
+                            except Exception:
+                                _dts_fl = _dts
+                            _it = ICalGLib.RecurIterator.new(_rule, _dts_fl)
                             for _ in range(500):
                                 _occ = _it.next()
                                 if _occ is None or _occ.is_null_time():
