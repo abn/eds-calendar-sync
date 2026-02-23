@@ -18,6 +18,7 @@ from eds_calendar_sync.models import SyncConfig
 from eds_calendar_sync.models import SyncStats
 from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh
+from eds_calendar_sync.sync.utils import _EXDATE_DATE_RE
 from eds_calendar_sync.sync.utils import compute_hash
 from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_event_cancelled
@@ -265,6 +266,14 @@ def run_one_way_to_personal(
                 except Exception:
                     pass
                 _ed = _comp.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+            # Fallback for VALUE=DATE EXDATEs that return null_time via
+            # get_exdate() in some libical-glib builds.
+            if not _exdates:
+                try:
+                    for _em in _EXDATE_DATE_RE.finditer(_comp.as_ical_string() or ""):
+                        _exdates.add(_em.group(1))
+                except Exception:
+                    pass
             if _exdates:
                 master_exdates_by_uid[_uid] = _exdates
 

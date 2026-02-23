@@ -16,6 +16,7 @@ from gi.repository import ICalGLib  # noqa: F401 (GLib kept for version side-eff
 # Works for both date-only (UNTIL=20260316) and UTC datetime
 # (UNTIL=20260316T100000Z) — we only need the date portion.
 _RRULE_UNTIL_RE = re.compile(r"UNTIL=(\d{8})")
+_EXDATE_DATE_RE = re.compile(r"^EXDATE[^:\n]*:(\d{8})", re.MULTILINE)
 
 
 class EventSanitizer:
@@ -146,6 +147,14 @@ class EventSanitizer:
                     except Exception:
                         pass
                     _ed_p = event.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+                # Fallback: VALUE=DATE EXDATEs return null_time via get_exdate()
+                # in some libical-glib builds; parse them from the iCal string.
+                if not _exdates:
+                    try:
+                        for _em in _EXDATE_DATE_RE.finditer(event.as_ical_string() or ""):
+                            _exdates.add(_em.group(1))
+                    except Exception:
+                        pass
                 if _exdates:
                     _dts = _dts_prop.get_dtstart()
                     _dts_date = f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"

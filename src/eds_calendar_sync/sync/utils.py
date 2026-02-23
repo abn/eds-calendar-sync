@@ -17,6 +17,11 @@ from gi.repository import ICalGLib
 # (UNTIL=20260316T100000Z) — we only need the date portion.
 _RRULE_UNTIL_RE = re.compile(r"UNTIL=(\d{8})")
 
+# Regex to extract excluded dates from EXDATE lines in an iCal string.
+# Matches both VALUE=DATE (EXDATE;VALUE=DATE:20260216) and TZID datetime
+# (EXDATE;TZID=...:20260216T110000) forms — captures the YYYYMMDD prefix.
+_EXDATE_DATE_RE = re.compile(r"^EXDATE[^:\n]*:(\d{8})", re.MULTILINE)
+
 # E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND = 1  (from e-cal-client-error-quark)
 _EDS_NOT_FOUND_CODE = 1
 _EDS_CLIENT_ERROR_DOMAIN = "e-cal-client-error-quark"
@@ -110,7 +115,11 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
     if not rrule_prop:
         return True  # Non-recurring event always has a valid "occurrence"
 
-    # Collect excluded dates as YYYYMMDD strings for quick lookup
+    # Collect excluded dates as YYYYMMDD strings for quick lookup.
+    # Try the ICalGLib accessor first; fall back to parsing the component's
+    # iCal string directly when get_exdate() returns null_time (a known
+    # silent failure for EXDATE;VALUE=DATE properties in some libical-glib
+    # builds).
     exdates = set()
     prop = check.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
     while prop:
@@ -121,6 +130,13 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         except Exception:
             pass
         prop = check.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
+
+    if not exdates:
+        try:
+            for m in _EXDATE_DATE_RE.finditer(check.as_ical_string() or ""):
+                exdates.add(m.group(1))
+        except Exception:
+            pass
 
     if not exdates:
         return True  # No exclusions → series has occurrences
@@ -134,11 +150,11 @@ def has_valid_occurrences(comp: ICalGLib.Component) -> bool:
         # When DTSTART carries a TZID (datetime) but UNTIL in the RRULE is
         # a date-only value, libical's RecurIterator does not reliably stop
         # at UNTIL — it emits spurious occurrences past the series end.
-        # Parse UNTIL from the raw RRULE string — more reliable than
-        # rule.get_until() which may silently fail in some libical-glib builds.
+        # Parse UNTIL from the component's iCal string — avoids ICalGLib
+        # property accessor methods that may silently fail in some builds.
         until_str = None
         try:
-            m = _RRULE_UNTIL_RE.search(rrule_prop.get_value_as_string() or "")
+            m = _RRULE_UNTIL_RE.search(check.as_ical_string() or "")
             if m:
                 until_str = m.group(1)
         except Exception:
