@@ -19,6 +19,9 @@ from eds_calendar_sync.models import SyncStats
 from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh_two_way
 from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import has_valid_occurrences
+from eds_calendar_sync.sync.utils import is_event_cancelled
+from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import parse_component
 
 
@@ -437,6 +440,20 @@ def run_two_way(
                 # would produce circular duplicates.
                 if EventSanitizer.is_managed_event(work_comp):
                     logger.debug(f"Skipping managed work event: {work_uid}")
+                    continue
+                # Skip cancelled events — Exchange rejects creating them.
+                if is_event_cancelled(work_comp):
+                    logger.debug(f"Skipping cancelled work event: {work_uid}")
+                    continue
+                # Skip transparent (free-time) events — they don't block time
+                # and should not appear as busy in the personal calendar.
+                if is_free_time(work_comp):
+                    logger.debug(f"Skipping transparent work event: {work_uid}")
+                    continue
+                # Skip recurring series where every occurrence is excluded
+                # by EXDATE — Exchange rejects creating empty series.
+                if not has_valid_occurrences(work_comp):
+                    logger.debug(f"Skipping empty recurring work event: {work_uid}")
                     continue
                 _process_new_work_event(
                     config, stats, logger, work_uid, work_comp, personal_client, state_db
