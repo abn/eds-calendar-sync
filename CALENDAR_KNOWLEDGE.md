@@ -374,7 +374,7 @@ if comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
 
 The master `VEVENT`'s `EXDATE` list already encodes any declined or cancelled occurrences, so skipping exception VEVENTs is safe for the purpose of copying the recurring series to the target calendar.
 
-**Note**: `to_personal.py` handles this differently — it uses compound UID keys so that both master and exception VEVENTs are stored and synced individually. The bidirectional path (`two_way.py`) takes the simpler approach of dropping exception VEVENTs and relying on the master.
+**Note**: `to_personal.py` uses compound UID keys so that both master and exception VEVENTs are stored and synced individually.  `two_way.py` uses a hybrid approach: non-rescheduled exception VEVENTs (DTSTART date == RECURRENCE-ID date) are skipped when building the work-events dict, and instead their RECURRENCE-ID date is stripped from the master's phantom EXDATEs so the RRULE generates the occurrence in the personal calendar.  **Rescheduled** exception VEVENTs (DTSTART date ≠ RECURRENCE-ID date) are added to `work_events` with a compound key `uid::RID::rid_str`, so they appear at their new time in personal without causing a phantom occurrence at the original slot.
 
 ### ORGANIZER and ATTENDEE Must Be Stripped
 
