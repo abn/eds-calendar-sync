@@ -484,6 +484,6 @@ def run_verify(
     )
     console.print(
         f"\n[bold]{ok_count}/{total_eligible}[/bold] work event(s) OK · "
-        f"[bold red]{total_issues}[/bold] issue(s) found."
+        f"[bold red]{total_issues}[/bold red] issue(s) found."
     )
     return False
