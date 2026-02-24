@@ -872,6 +872,65 @@ def inspect(
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: verify
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def verify(
+    work_calendar: _WORK_OPT = None,
+    personal_calendar: _PERS_OPT = None,
+    weeks: Annotated[
+        int, typer.Option("--weeks", help="Number of weeks to check (default: 4)")
+    ] = 4,
+    from_date: Annotated[
+        str | None,
+        typer.Option("--from-date", help="Start date YYYY-MM-DD (default: today)"),
+    ] = None,
+) -> None:
+    """Verify sync completeness: check that expected events appear in both calendars.
+
+    Fetches [bold]--weeks[/] weeks of events from work and personal calendars,
+    applies the same eligibility guards as sync, and reports any missing,
+    stale, or orphaned events.
+
+    Exits with code 1 if any issues are found.
+    """
+    from datetime import date
+    from datetime import timedelta
+
+    from eds_calendar_sync.verify import run_verify
+
+    config_file = _load_config_file(state.config_path)
+    work_id = work_calendar or config_file.get("work_calendar_id")
+    personal_id = personal_calendar or config_file.get("personal_calendar_id")
+    if not work_id or not personal_id:
+        console.print("[bold red]Error:[/] Work and personal calendar IDs required.")
+        raise typer.Exit(1)
+
+    if from_date:
+        try:
+            window_start = date.fromisoformat(from_date)
+        except ValueError:
+            console.print(f"[bold red]Error:[/] Invalid date: {from_date!r}")
+            raise typer.Exit(1) from None
+    else:
+        window_start = date.today()
+    window_end = window_start + timedelta(weeks=weeks)
+
+    ok = run_verify(
+        work_calendar_id=work_id,
+        personal_calendar_id=personal_id,
+        state_db_path=state.state_db,
+        console=console,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    if not ok:
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

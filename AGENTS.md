@@ -253,7 +253,47 @@ Three modes:
 
 All modes accept `--dry-run`.
 
-### 6.8 Confirmation Prompt
+### 6.8 Verify (`verify` subcommand)
+
+Read-only audit that cross-references live calendar state against the state DB. Does not
+modify any events. Implemented in `src/eds_calendar_sync/verify.py` (`run_verify()`).
+
+**Algorithm:**
+
+1. Connect to both calendars and fetch all events.
+2. Build `work_events` map — same logic as `run_two_way()`:
+   - Master VEVENTs (no `RECURRENCE-ID`) keyed by plain UID.
+   - Rescheduled exception VEVENTs (DTSTART date ≠ RECURRENCE-ID date) added with compound
+     key `uid::RID::rid_str` (same as sync).
+   - Non-rescheduled exception VEVENTs → `work_valid_exception_dates` for EXDATE stripping.
+3. Apply the same four eligibility guards as sync (`is_managed_event`, `is_event_cancelled`,
+   `is_free_time`, `has_valid_occurrences`) plus `_has_occurrence_in_window()` to produce
+   `eligible_work`.
+4. Build `personal_events` map (masters only, no window filter — detects deletions regardless
+   of when the event starts).
+5. Load state DB records; build two lookup dicts keyed by work UID and by personal UID.
+6. For each `eligible_work` entry, classify as **OK**, **MISSING**, **ORPHANED_DB**, or **STALE**.
+   For each managed personal event in the window, classify as **ORPHANED_PERSONAL** or
+   **ORPHANED_SOURCE**.
+7. Display Rich tables per non-empty issue category; exit code 1 if any issues found.
+
+**Issue categories:**
+
+| Category | Meaning |
+|----------|---------|
+| `MISSING` | Eligible work event has no DB record → was never synced |
+| `ORPHANED_DB` | DB record exists but `target_uid` not in personal calendar → external deletion |
+| `STALE` | `compute_hash(strip_exdates(current_work_ical))` ≠ stored `source_hash` → work changed |
+| `ORPHANED_PERSONAL` | Managed personal event with no DB record → crash residual |
+| `ORPHANED_SOURCE` | Managed personal event whose source work UID no longer exists |
+
+**`_has_occurrence_in_window(comp, window_start, window_end)`** — private helper that mirrors
+the `RecurIterator` pattern from `has_valid_occurrences()` in `utils.py`. Non-recurring events:
+check if DTSTART is in window. Recurring events: iterate with the same TZID-safety, UNTIL-cap,
+and two-path EXDATE fallback, stopping as soon as an in-window occurrence is found or the
+iterator passes `window_end`. Returns `True` on any API error (safe fallback).
+
+### 6.9 Confirmation Prompt
 
 By default, the tool displays sync configuration and prompts `Proceed? [y/N]` before making
 changes. This is skipped automatically when:
@@ -283,6 +323,7 @@ eds-calendar-sync [--config PATH] [--state-db PATH] [--verbose] COMMAND [OPTIONS
 | `sync` | Synchronise calendars (interactive wizard when called with no args) |
 | `refresh` | Remove synced events then re-sync |
 | `clear` | Remove managed events without re-syncing |
+| `verify` | Post-sync audit: check expected events appear in both calendars |
 | `migrate [OLD [NEW]]` | Update calendar IDs in state DB (audit/interactive/direct modes) |
 | `status` | Show config, resolved calendar names, and per-pair DB summary |
 | `calendars` | List all configured EDS calendars |
@@ -324,6 +365,15 @@ interactive wizard (see §6.6).
 | `OLD` (positional) | str | — | Calendar UID to replace (omit for audit mode) |
 | `NEW` (positional) | str | — | Replacement UID (omit for interactive picker) |
 | `--dry-run` | flag | off | Preview without writing |
+
+### Options for `verify`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--work-calendar UID` | `-w` | str | — | EDS source UID for work calendar |
+| `--personal-calendar UID` | `-p` | str | — | EDS source UID for personal calendar |
+| `--weeks N` | | int | 4 | Number of weeks in the audit window |
+| `--from-date YYYY-MM-DD` | | str | today | Start of the audit window |
 
 ### Options for `inspect`
 

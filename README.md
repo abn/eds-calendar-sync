@@ -218,6 +218,29 @@ which calendar is cleared; the default clears both.
 > (which describe *sync direction*). The semantics are equivalent but the flag names
 > are clearer for a cleanup operation.
 
+#### Verify (Post-Sync Audit)
+```bash
+# Check 4 weeks from today (default)
+eds-calendar-sync verify
+
+# Check a specific window
+eds-calendar-sync verify --weeks 8
+eds-calendar-sync verify --from-date 2026-01-01 --weeks 4
+```
+
+`verify` fetches events from both calendars, applies the same eligibility guards as `sync`,
+cross-references the state DB, and reports:
+
+| Issue | Meaning |
+|-------|---------|
+| `MISSING` | Eligible work event was never synced to personal |
+| `ORPHANED_DB` | State record exists but personal event was deleted externally |
+| `STALE` | Work event changed since last sync (re-sync needed) |
+| `ORPHANED_PERSONAL` | Managed personal event has no DB record (crash residual) |
+| `ORPHANED_SOURCE` | Work source deleted but personal copy remains |
+
+Exits with code 0 when everything is confirmed, code 1 if any issues are found (usable in scripts).
+
 ### Configuration File Usage
 
 If you created `~/.config/eds-calendar-sync.conf`:
@@ -246,6 +269,7 @@ Commands:
   sync        Synchronise calendars (bidirectional by default)
   refresh     Remove synced events then re-sync
   clear       Remove all synced events without re-syncing
+  verify      Post-sync audit: check expected events appear in both calendars
   migrate     Update calendar IDs in state DB after GOA reconnection
   status      Show sync configuration and state database summary
   calendars   List all configured EDS calendars
@@ -267,6 +291,12 @@ Options for clear:
   --work                      Clear work calendar only (personal→work events)
   --dry-run, -n               Preview changes without applying them
   --yes, -y                   Skip confirmation prompt
+
+Options for verify:
+  --work-calendar, -w UID     Work calendar EDS UID (overrides config)
+  --personal-calendar, -p UID Personal calendar EDS UID (overrides config)
+  --weeks N                   Number of weeks to audit (default: 4)
+  --from-date YYYY-MM-DD      Start of the audit window (default: today)
 ```
 
 ## Systemd Timer Setup
