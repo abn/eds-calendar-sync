@@ -381,7 +381,31 @@ Python stdlib: `sqlite3`, `hashlib`, `uuid`, `configparser`, `logging`, `pathlib
 Third-party: `typer` (CLI framework), `rich` (terminal output, logging handler).
 
 
-## 10. Known Limitations and Design Decisions
+## 10. Knowledge Base
+
+### CALENDAR_KNOWLEDGE.md
+
+[`CALENDAR_KNOWLEDGE.md`](CALENDAR_KNOWLEDGE.md) is the authoritative reference for everything
+learned about iCalendar standards, EDS, Exchange/M365, Google Calendar, libical-glib, and
+cross-provider sync pitfalls. It covers:
+
+- iCalendar (RFC 5545) property semantics and edge cases
+- Microsoft Exchange / M365 behaviour, restrictions, and error codes
+- Google Calendar CalDAV behaviour
+- EDS API internals and error domains
+- libical-glib silent failure modes and workarounds
+- Cross-provider sync pitfalls (UID rewriting, loop prevention, orphan recovery)
+- Property round-trip survival tables (what each provider preserves)
+- Change detection and hashing strategy
+- Idempotency and crash-safety patterns
+
+**Agent instruction**: whenever you discover a new quirk, restriction, error, or behavioural
+detail about any of the above while debugging or extending this codebase, **add it to
+`CALENDAR_KNOWLEDGE.md`** in the appropriate section before closing the session. Keep entries
+specific and concrete — include the error message, the root cause, and the fix or workaround.
+
+
+## 11. Known Limitations and Design Decisions
 
 - **EDS only**: The tool operates entirely through the local EDS cache. It does not communicate
   with Exchange or Google directly; those sync jobs are handled by GNOME Online Accounts / EDS
