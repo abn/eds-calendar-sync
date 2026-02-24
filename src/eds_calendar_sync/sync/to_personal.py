@@ -22,6 +22,7 @@ from eds_calendar_sync.sync.utils import build_orphan_index
 from eds_calendar_sync.sync.utils import compute_hash
 from eds_calendar_sync.sync.utils import compute_source_fingerprint
 from eds_calendar_sync.sync.utils import has_valid_occurrences
+from eds_calendar_sync.sync.utils import is_declined_by_user
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import is_not_found_error
@@ -304,6 +305,11 @@ def run_one_way_to_personal(
             if is_event_cancelled(_comp):
                 continue
             if is_free_time(_comp):
+                continue
+            # Exchange doesn't set TRANSP:TRANSPARENT on declined exception VEVENTs.
+            # Detect via PARTSTAT=DECLINED on the owner's ATTENDEE entry.
+            if config.work_account_email and is_declined_by_user(_comp, config.work_account_email):
+                logger.debug("Skipping declined exception VEVENT uid=%s", _comp.get_uid())
                 continue
             _uid = _comp.get_uid()
             if not _uid:

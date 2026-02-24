@@ -268,6 +268,38 @@ def is_free_time(comp: ICalGLib.Component) -> bool:
         return val.strip().upper() == "TRANSPARENT"
 
 
+def is_declined_by_user(comp: ICalGLib.Component, user_email: str) -> bool:
+    """Return True if user_email's ATTENDEE entry has PARTSTAT=DECLINED.
+
+    Exchange does NOT set TRANSP:TRANSPARENT on declined recurring exception
+    VEVENTs, so this PARTSTAT check is the only reliable detection method.
+    Returns False on any error (safe fallback — errs toward including events).
+    """
+    if not user_email:
+        return False
+    check = comp
+    if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+        check = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+        if not check:
+            return False
+    email_lower = user_email.lower()
+    attendee_prop = check.get_first_property(ICalGLib.PropertyKind.ATTENDEE_PROPERTY)
+    while attendee_prop:
+        val = attendee_prop.get_attendee() or ""
+        if email_lower in val.lower():
+            ps_p = attendee_prop.get_first_parameter(ICalGLib.ParameterKind.PARTSTAT_PARAMETER)
+            if ps_p:
+                try:
+                    if ps_p.get_partstat() == ICalGLib.ParameterPartstat.DECLINED:
+                        return True
+                except (AttributeError, TypeError):
+                    # as_ical_string() returns e.g. "PARTSTAT=DECLINED"
+                    if "DECLINED" in (ps_p.as_ical_string() or "").upper():
+                        return True
+        attendee_prop = check.get_next_property(ICalGLib.PropertyKind.ATTENDEE_PROPERTY)
+    return False
+
+
 def strip_exdates_for_dates(ical_str: str, dates: set[str]) -> str:
     """Return a copy of ical_str with EXDATE lines for the given dates removed.
 

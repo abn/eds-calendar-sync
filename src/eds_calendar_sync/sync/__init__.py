@@ -38,6 +38,14 @@ class CalendarSynchronizer:
         work_client.connect()
         personal_client.connect()
 
+        # Auto-detect work account email for PARTSTAT=DECLINED detection.
+        # config-file value (set in cli.py) takes precedence if already present.
+        if self.config.work_account_email is None:
+            detected = work_client.get_account_email()
+            if detected:
+                self.logger.debug("Auto-detected work account email: %s", detected)
+                self.config.work_account_email = detected
+
         with StateDatabase(
             self.config.state_db_path,
             self.config.work_calendar_id,

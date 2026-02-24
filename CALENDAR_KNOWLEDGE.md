@@ -112,9 +112,7 @@ Exchange represents a declined recurring instance with **two** iCal artefacts:
 1. **Master VEVENT**: The declined occurrence date is added to the master's `EXDATE` list.
 2. **Exception VEVENT**: A separate VEVENT with the same `UID` and `RECURRENCE-ID` pointing to the declined date. The `SUMMARY` is often prefixed with `"Declined: "`. **Exchange does NOT set `TRANSP:TRANSPARENT` on these exception VEVENTs**, making them indistinguishable from legitimate rescheduled occurrences by TRANSP alone.
 
-**Detection algorithm**: A declined instance exception VEVENT can be identified when:
-- It has a `RECURRENCE-ID` whose date appears in the master VEVENT's `EXDATE` set, AND
-- Its `DTSTART` falls on the same date as its `RECURRENCE-ID` (ruling out genuinely rescheduled occurrences, which have a different `DTSTART`).
+**Detection**: Check the calendar owner's `ATTENDEE` entry for `PARTSTAT=DECLINED`. Exchange reliably sets this when the owner declines a meeting occurrence, even though it does not set `TRANSP:TRANSPARENT` on the exception VEVENT. Implementation: `is_declined_by_user(comp, user_email)` in `sync/utils.py`. The owner's email comes from `SyncConfig.work_account_email`, auto-populated via `EDSCalendarClient.get_account_email()` (reads `EDataServer.SourceAuthentication.get_user()` from the EDS source), with optional override via `work_account_email` in the config file. Guard is silently skipped when email is unavailable (unchanged behaviour).
 
 **Impact**: Such exception VEVENTs should be skipped during sync; the master VEVENT (with its updated `EXDATE`) is synced normally and already excludes the declined occurrence.
 

@@ -116,6 +116,7 @@ def _build_config(
     config_file = _load_config_file(state.config_path)
     work_id = work_calendar or config_file.get("work_calendar_id")
     personal_id = personal_calendar or config_file.get("personal_calendar_id")
+    work_account_email: str | None = config_file.get("work_account_email") or None
 
     if not work_id or not personal_id:
         console.print(
@@ -142,6 +143,7 @@ def _build_config(
         clear=clear,
         yes=yes,
         keep_reminders=keep_reminders,
+        work_account_email=work_account_email,
     )
 
 

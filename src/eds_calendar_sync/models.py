@@ -29,6 +29,7 @@ class SyncConfig:
     clear: bool = False
     yes: bool = False  # Auto-confirm without prompting
     keep_reminders: bool = False  # Preserve VALARM sub-components (stripped by default)
+    work_account_email: str | None = None  # for PARTSTAT=DECLINED detection
 
 
 @dataclass

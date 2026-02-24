@@ -136,6 +136,29 @@ class EDSCalendarClient:
         if not success:
             raise CalendarSyncError(f"Failed to remove event {uid}")
 
+    def get_account_email(self) -> str | None:
+        """Return the authenticated user email for this calendar, or None.
+
+        Reads EDataServer.SourceAuthentication.get_user() from the calendar
+        source, then from the parent GOA source. Returns a value only when it
+        contains '@'. Must be called after connect().
+        """
+        if not self.client:
+            return None
+        try:
+            source = self.client.get_source()
+            if not source:
+                return None
+            ext_name = EDataServer.SOURCE_EXTENSION_AUTHENTICATION
+            for src in (source, self.registry.ref_source(source.get_parent() or "")):
+                if src and src.has_extension(ext_name):
+                    user = src.get_extension(ext_name).get_user()
+                    if user and "@" in user:
+                        return user
+        except Exception:
+            pass
+        return None
+
     def get_event(self, uid: str) -> ICalGLib.Component | None:
         """Retrieve a single event by UID."""
         if not self.client:

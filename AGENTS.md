@@ -417,7 +417,43 @@ Exit code is `0` on success, `1` if any errors occurred or on fatal failure, `13
 `KeyboardInterrupt`.
 
 
-## 9. Dependencies
+## 9. Development Tooling
+
+### Package Manager: Poetry
+
+This project uses **[Poetry](https://python-poetry.org/)** for dependency management and virtual
+environment setup. Always prefix Python/pytest commands with `poetry run`:
+
+```bash
+# Run tests
+poetry run pytest
+
+# Run a specific test file or class
+poetry run pytest tests/test_utils.py -v -k "TestIsDeclinedByUser"
+
+# Run the CLI
+poetry run eds-calendar-sync sync --dry-run
+
+# Install / sync dependencies
+poetry install
+```
+
+Do **not** invoke `python -m pytest` or a bare `pytest` — these will use the system Python and
+will fail with "No module named pytest" because the project's virtualenv is managed by Poetry.
+
+### Running Tests
+
+The test suite lives in `tests/`. All tests use real `ICalGLib` components so that libical-glib
+quirks are exercised in-process. Tests are fast (<2 s for the full suite).
+
+```bash
+poetry run pytest          # full suite
+poetry run pytest -v       # verbose output
+poetry run pytest -k NAME  # filter by test name
+```
+
+
+## 10. Runtime Dependencies
 
 | Library | GI Version | Purpose |
 |---------|-----------|---------|
@@ -431,7 +467,7 @@ Python stdlib: `sqlite3`, `hashlib`, `uuid`, `configparser`, `logging`, `pathlib
 Third-party: `typer` (CLI framework), `rich` (terminal output, logging handler).
 
 
-## 10. Knowledge Base
+## 11. Knowledge Base
 
 ### CALENDAR_KNOWLEDGE.md
 
@@ -455,7 +491,7 @@ detail about any of the above while debugging or extending this codebase, **add 
 specific and concrete — include the error message, the root cause, and the fix or workaround.
 
 
-## 11. Known Limitations and Design Decisions
+## 12. Known Limitations and Design Decisions
 
 - **EDS only**: The tool operates entirely through the local EDS cache. It does not communicate
   with Exchange or Google directly; those sync jobs are handled by GNOME Online Accounts / EDS

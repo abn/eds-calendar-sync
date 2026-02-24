@@ -15,6 +15,7 @@ from gi.repository import ICalGLib
 
 from eds_calendar_sync.sync.utils import compute_hash
 from eds_calendar_sync.sync.utils import has_valid_occurrences
+from eds_calendar_sync.sync.utils import is_declined_by_user
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import is_not_found_error
@@ -513,3 +514,82 @@ class TestIsNotFoundError:
     def test_non_glib_other_error(self):
         """Plain Exception with unrelated message → False."""
         assert is_not_found_error(Exception("permission denied")) is False
+
+
+# ---------------------------------------------------------------------------
+# TestIsDeclinedByUser
+# ---------------------------------------------------------------------------
+
+
+def _make_exception_vevent(
+    uid: str,
+    attendees: tuple[tuple[str, str], ...] = (),
+) -> str:
+    """Build a bare exception VEVENT with RECURRENCE-ID and optional ATTENDEEs.
+    attendees: iterable of (email, partstat) pairs.
+    """
+    lines = [
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        "SUMMARY:DPS All-hands Weekly",
+        f"DTSTART:{_DTSTART}",
+        f"DTEND:{_DTEND}",
+        f"DTSTAMP:{_DTSTAMP}",
+        "RECURRENCE-ID:20260224T110000Z",
+    ]
+    for email, partstat in attendees:
+        lines.append(f"ATTENDEE;PARTSTAT={partstat};ROLE=REQ-PARTICIPANT:mailto:{email}")
+    lines.append("END:VEVENT")
+    return "\r\n".join(lines) + "\r\n"
+
+
+class TestIsDeclinedByUser:
+    _USER = "user@example.com"
+    _OTHER = "other@example.com"
+
+    def test_declined_by_user_returns_true(self):
+        comp = _parse(
+            _make_exception_vevent(
+                "D1", attendees=((self._USER, "DECLINED"), (self._OTHER, "ACCEPTED"))
+            )
+        )
+        assert is_declined_by_user(comp, self._USER) is True
+
+    def test_accepted_by_user_returns_false(self):
+        comp = _parse(_make_exception_vevent("D2", attendees=((self._USER, "ACCEPTED"),)))
+        assert is_declined_by_user(comp, self._USER) is False
+
+    def test_needs_action_returns_false(self):
+        comp = _parse(_make_exception_vevent("D3", attendees=((self._USER, "NEEDS-ACTION"),)))
+        assert is_declined_by_user(comp, self._USER) is False
+
+    def test_no_attendees_returns_false(self):
+        assert is_declined_by_user(_parse(_simple_vevent("D4")), self._USER) is False
+
+    def test_user_not_in_list_returns_false(self):
+        comp = _parse(_make_exception_vevent("D5", attendees=((self._OTHER, "DECLINED"),)))
+        assert is_declined_by_user(comp, self._USER) is False
+
+    def test_empty_email_returns_false(self):
+        comp = _parse(_make_exception_vevent("D6", attendees=((self._USER, "DECLINED"),)))
+        assert is_declined_by_user(comp, "") is False
+
+    def test_case_insensitive_email(self):
+        comp = _parse(_make_exception_vevent("D7", attendees=((self._USER, "DECLINED"),)))
+        assert is_declined_by_user(comp, "USER@EXAMPLE.COM") is True
+
+    def test_vcalendar_wrapper(self):
+        vevent = _make_exception_vevent("D8", attendees=((self._USER, "DECLINED"),))
+        assert is_declined_by_user(_parse(_wrap_vcalendar(vevent)), self._USER) is True
+
+    def test_vcalendar_empty_no_crash(self):
+        vcal = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nEND:VCALENDAR\r\n"
+        assert is_declined_by_user(_parse(vcal), self._USER) is False
+
+    def test_other_declined_user_accepted(self):
+        comp = _parse(
+            _make_exception_vevent(
+                "D9", attendees=((self._OTHER, "DECLINED"), (self._USER, "ACCEPTED"))
+            )
+        )
+        assert is_declined_by_user(comp, self._USER) is False
