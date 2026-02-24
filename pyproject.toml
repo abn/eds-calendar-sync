@@ -27,6 +27,8 @@ packages = [{include = "eds_calendar_sync", from = "src"}]
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "*"
+pytest = "*"
+pytest-mock = "*"
 ruff = "*"
 
 # ---------------------------------------------------------------------------
@@ -63,3 +65,10 @@ known-first-party = ["eds_calendar_sync"]
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
