@@ -18,7 +18,6 @@ from eds_calendar_sync.models import SyncConfig
 from eds_calendar_sync.models import SyncStats
 from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh
-from eds_calendar_sync.sync.utils import _EXDATE_DATE_RE
 from eds_calendar_sync.sync.utils import build_orphan_index
 from eds_calendar_sync.sync.utils import compute_hash
 from eds_calendar_sync.sync.utils import compute_source_fingerprint
@@ -27,6 +26,7 @@ from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import is_not_found_error
 from eds_calendar_sync.sync.utils import parse_component
+from eds_calendar_sync.sync.utils import strip_exdates_for_dates
 
 
 def _process_creates(
@@ -274,50 +274,66 @@ def run_one_way_to_personal(
 
         # Fetch work events
         logger.info("Fetching work events...")
-        work_events = work_client.get_all_events()
-        work_uids_seen: set[str] = set()
+        work_events_list = work_client.get_all_events()
+        work_events: dict[str, ICalGLib.Component] = {}
 
-        # Pre-scan: collect each master VEVENT's EXDATE set.
-        # Exchange represents a declined recurring instance by:
-        #   (a) adding the declined date to the master VEVENT's EXDATE
-        #   (b) creating an exception VEVENT (same UID, RECURRENCE-ID)
-        # Exchange does NOT set TRANSP:TRANSPARENT on these exceptions.
-        # We read the master EXDATEs here so the main loop can detect
-        # and skip exception VEVENTs that represent declined instances.
-        master_exdates_by_uid: dict[str, set[str]] = {}
-        for _obj in work_events:
+        # First pass: collect master VEVENTs
+        for _obj in work_events_list:
             _comp = parse_component(_obj)
-            # Only master VEVENTs (no RECURRENCE-ID)
             if _comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
+                continue
+            _uid = _comp.get_uid()
+            if _uid:
+                work_events[_uid] = _comp
+
+        # Second pass: analysis of exception VEVENTs.
+        # Build a map from work UID → set of YYYYMMDD dates that have a valid
+        # (non-managed, non-cancelled, non-free) exception VEVENT.  Exchange
+        # stores every explicitly-defined recurring occurrence as both an EXDATE
+        # in the master VEVENT and a separate exception VEVENT with RECURRENCE-ID.
+        # Those "phantom" EXDATEs suppress GNOME Calendar display even though the
+        # occurrences are real meetings.  We strip them when writing to personal.
+        work_valid_exception_dates: dict[str, set[str]] = {}
+        for _obj in work_events_list:
+            _comp = parse_component(_obj)
+            _rid_prop = _comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY)
+            if not _rid_prop:
+                continue  # master VEVENT — handled above
+            if EventSanitizer.is_managed_event(_comp):
+                continue
+            if is_event_cancelled(_comp):
+                continue
+            if is_free_time(_comp):
                 continue
             _uid = _comp.get_uid()
             if not _uid:
                 continue
-            _exdates: set[str] = set()
-            _ed = _comp.get_first_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
-            while _ed:
-                try:
-                    _t = _ed.get_exdate()
-                    if _t and not _t.is_null_time():
-                        _exdates.add(f"{_t.get_year():04d}{_t.get_month():02d}{_t.get_day():02d}")
-                except Exception:
-                    pass
-                _ed = _comp.get_next_property(ICalGLib.PropertyKind.EXDATE_PROPERTY)
-            # Fallback for VALUE=DATE EXDATEs that return null_time via
-            # get_exdate() in some libical-glib builds.
-            if not _exdates:
-                try:
-                    for _em in _EXDATE_DATE_RE.finditer(_comp.as_ical_string() or ""):
-                        _exdates.add(_em.group(1))
-                except Exception:
-                    pass
-            if _exdates:
-                master_exdates_by_uid[_uid] = _exdates
+            try:
+                _rid_t = _rid_prop.get_recurrenceid()
+                _rid_date = f"{_rid_t.get_year():04d}{_rid_t.get_month():02d}{_rid_t.get_day():02d}"
+                # Detect genuinely rescheduled occurrences (DTSTART date ≠ RECURRENCE-ID date).
+                _dts_prop = _comp.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
+                _is_rescheduled = False
+                if _dts_prop:
+                    _dts = _dts_prop.get_dtstart()
+                    _dts_date = f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"
+                    _is_rescheduled = _dts_date != _rid_date
+                if _is_rescheduled:
+                    # Rescheduled: treat as a standalone event keyed by compound UID.
+                    _rid_str = _rid_t.as_ical_string()
+                    _compound_uid = f"{_uid}::RID::{_rid_str}"
+                    work_events[_compound_uid] = _comp
+                else:
+                    # Non-rescheduled: record the date so we can strip the phantom EXDATE.
+                    work_valid_exception_dates.setdefault(_uid, set()).add(_rid_date)
+            except Exception:
+                pass
 
         # Process each work event
         logger.info(f"Processing {len(work_events)} work events...")
-        for obj in work_events:
-            comp = parse_component(obj)
+        work_uids_seen: set[str] = set()
+
+        for work_uid, comp in work_events.items():
             base_uid = comp.get_uid()
 
             # Skip events we created ourselves (managed events in the work
@@ -328,76 +344,43 @@ def run_one_way_to_personal(
                 logger.debug(f"Skipping managed event: {base_uid}")
                 continue
 
-            # Skip cancelled events entirely.  They no longer block time
-            # and Exchange rejects creating them via CreateItem.  Their
-            # absence from work_uids_seen will cause _process_deletions
-            # to remove any previously synced copy from the personal
-            # calendar.
+            # Skip cancelled events entirely.
             if is_event_cancelled(comp):
                 logger.debug(f"Skipping cancelled event: {base_uid}")
                 continue
 
-            # Skip transparent (free-time) events — they do not block the
-            # user's time so they should not appear as busy in the personal
-            # calendar.  Exchange marks declined meetings as transparent.
+            # Skip transparent (free-time) events.
             if is_free_time(comp):
                 logger.debug(f"Skipping transparent (free-time) event: {base_uid}")
                 continue
 
-            # Skip recurring events where every occurrence is excluded
-            # by EXDATE (the series expands to zero instances).  Exchange
-            # rejects creating such an empty series with ErrorItemNotFound.
-            if not has_valid_occurrences(comp):
+            # Skip recurring events where every occurrence is excluded by EXDATE.
+            # Check against the stripped iCal so that series whose EXDATEs
+            # are all "phantom" (covered by valid exception VEVENTs) are
+            # not incorrectly skipped.
+            _valid_ex_dates = work_valid_exception_dates.get(work_uid, set())
+            if _valid_ex_dates:
+                _stripped = ICalGLib.Component.new_from_string(
+                    strip_exdates_for_dates(comp.as_ical_string(), _valid_ex_dates)
+                )
+                _has_valid = has_valid_occurrences(_stripped)
+            else:
+                _has_valid = has_valid_occurrences(comp)
+
+            if not _has_valid:
                 logger.debug(
                     f"Skipping empty recurring series "
                     f"(all occurrences excluded by EXDATE): {base_uid}"
                 )
                 continue
 
-            # Exception occurrences of a recurring series share the same
-            # UID as the master VEVENT but carry a RECURRENCE-ID property.
-            # Build a compound state key so master and each exception are
-            # tracked independently (avoids duplicate-UID collisions).
-            rid_prop = comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY)
-            if rid_prop:
-                rid_str = rid_prop.get_recurrenceid().as_ical_string()
-                work_uid = f"{base_uid}::RID::{rid_str}"
-            else:
-                work_uid = base_uid
-
-            # Skip exception VEVENTs that represent declined or removed
-            # instances.  Exchange records a declined series instance by:
-            # (a) adding the declined date to the master's EXDATE, and
-            # (b) creating an exception VEVENT (same UID + RECURRENCE-ID).
-            # Exchange does NOT set TRANSP:TRANSPARENT on these.
-            # We detect them by checking that the exception's RECURRENCE-ID
-            # date is in the master's EXDATE AND the exception's DTSTART
-            # falls on the same date (ruling out genuinely rescheduled
-            # occurrences, which have a different DTSTART date).
-            if rid_prop:
-                try:
-                    _rid_t = rid_prop.get_recurrenceid()
-                    _rid_date = (
-                        f"{_rid_t.get_year():04d}{_rid_t.get_month():02d}{_rid_t.get_day():02d}"
-                    )
-                    if _rid_date in master_exdates_by_uid.get(base_uid, set()):
-                        _dts_prop = comp.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
-                        if _dts_prop:
-                            _dts = _dts_prop.get_dtstart()
-                            _dts_date = (
-                                f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"
-                            )
-                            if _dts_date == _rid_date:
-                                logger.debug(
-                                    f"Skipping declined/removed exception {base_uid} on {_rid_date}"
-                                )
-                                continue
-                except Exception:
-                    pass
-
             work_uids_seen.add(work_uid)
 
             ical_str = comp.as_ical_string()
+            # Strip phantom EXDATEs before hashing and syncing.
+            if work_uid in work_valid_exception_dates:
+                ical_str = strip_exdates_for_dates(ical_str, work_valid_exception_dates[work_uid])
+
             obj_hash = compute_hash(ical_str)
 
             if work_uid not in state:

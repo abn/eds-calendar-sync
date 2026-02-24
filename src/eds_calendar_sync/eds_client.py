@@ -99,8 +99,24 @@ class EDSCalendarClient:
         if not self.client:
             raise CalendarSyncError("Client not connected")
 
+        # Determine if we should modify the whole series or just this instance.
+        # For master recurring events (have RRULE and no RECURRENCE-ID),
+        # use ObjModType.ALL to ensure the series definition is updated.
+        mod_type = ECal.ObjModType.THIS
+        check = component
+        if component.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+            check = component.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+
+        if check:
+            has_rrule = check.get_first_property(ICalGLib.PropertyKind.RRULE_PROPERTY) is not None
+            has_rid = (
+                check.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY) is not None
+            )
+            if has_rrule and not has_rid:
+                mod_type = ECal.ObjModType.ALL
+
         success = self.client.modify_object_sync(
-            component, ECal.ObjModType.THIS, ECal.OperationFlags.NONE, None
+            component, mod_type, ECal.OperationFlags.NONE, None
         )
         if not success:
             raise CalendarSyncError("Failed to modify event")
