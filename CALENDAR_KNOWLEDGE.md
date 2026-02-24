@@ -357,6 +357,25 @@ In one-way sync (work → personal), both a master VEVENT and its exception VEVE
 
 **Solution**: Build a compound state key: `{base_uid}::RID::{recurrence_id_string}` for exception VEVENTs, and plain `{base_uid}` for master VEVENTs.
 
+### Master VEVENT Overwritten by Exception VEVENT (Bidirectional Sync)
+
+EDS returns **all** VEVENTs for a calendar query: both the master VEVENT (carries `RRULE`) and any exception VEVENTs (individual overridden occurrences, each with a `RECURRENCE-ID` property). Exception VEVENTs share the **same UID** as their master.
+
+When building an in-memory `dict[uid → component]` with a plain assignment (`d[uid] = comp`), whichever component arrives last wins. In practice EDS often returns exception VEVENTs after the master, so the exception overwrites the master and its `RRULE` is silently discarded. The affected events appear in the target calendar as single one-off occurrences (the exception's `DTSTART`) with no recurrence rule.
+
+**Symptom**: `len(raw_list)` > `len(dict)` — the difference counts overwritten entries.
+
+**Fix for bidirectional sync**: skip exception VEVENTs when building the dict:
+
+```python
+if comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
+    continue
+```
+
+The master `VEVENT`'s `EXDATE` list already encodes any declined or cancelled occurrences, so skipping exception VEVENTs is safe for the purpose of copying the recurring series to the target calendar.
+
+**Note**: `to_personal.py` handles this differently — it uses compound UID keys so that both master and exception VEVENTs are stored and synced individually. The bidirectional path (`two_way.py`) takes the simpler approach of dropping exception VEVENTs and relying on the master.
+
 ### ORGANIZER and ATTENDEE Must Be Stripped
 
 Leaving `ORGANIZER` set to someone else when creating via CalDAV causes the server to send meeting invitation emails. Leaving `ATTENDEE` intact may cause phantom responses. Always strip both before creating in any target calendar.

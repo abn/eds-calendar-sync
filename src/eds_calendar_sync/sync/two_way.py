@@ -457,6 +457,11 @@ def run_two_way(
         work_events: dict[str, ICalGLib.Component] = {}
         for obj in work_events_list:
             comp = parse_component(obj)
+            # Skip exception VEVENTs (those with RECURRENCE-ID). They share the same UID
+            # as the master VEVENT and would overwrite it, discarding the RRULE. The
+            # master's EXDATE list already accounts for declined/excluded occurrences.
+            if comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
+                continue
             work_events[comp.get_uid()] = comp
 
         logger.info("Fetching personal events...")
@@ -464,6 +469,8 @@ def run_two_way(
         personal_events: dict[str, ICalGLib.Component] = {}
         for obj in personal_events_list:
             comp = parse_component(obj)
+            if comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
+                continue
             personal_events[comp.get_uid()] = comp
 
         logger.info(
