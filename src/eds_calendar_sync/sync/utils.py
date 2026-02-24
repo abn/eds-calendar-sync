@@ -268,6 +268,33 @@ def is_free_time(comp: ICalGLib.Component) -> bool:
         return val.strip().upper() == "TRANSPARENT"
 
 
+def strip_exdates_for_dates(ical_str: str, dates: set[str]) -> str:
+    """Return a copy of ical_str with EXDATE lines for the given dates removed.
+
+    Exchange represents every explicitly-defined recurring occurrence as both
+    an EXDATE in the master VEVENT and a separate exception VEVENT (RECURRENCE-ID).
+    These "phantom" EXDATEs suppress GNOME Calendar display even though the
+    exception VEVENTs represent real meetings.  This function strips those EXDATEs
+    so that the RRULE expands the correct occurrences in the personal calendar.
+
+    ``dates`` is a set of YYYYMMDD strings.  Handles both date-only and datetime
+    EXDATE forms::
+
+        EXDATE;VALUE=DATE:20260303
+        EXDATE;TZID=Europe/Berlin:20260303T110000
+    """
+    if not dates:
+        return ical_str
+    lines = ical_str.splitlines(keepends=True)
+    result = []
+    for line in lines:
+        m = _EXDATE_DATE_RE.match(line)
+        if m and m.group(1) in dates:
+            continue
+        result.append(line)
+    return "".join(result)
+
+
 def compute_source_fingerprint(source_uid: str) -> str:
     """Return the 16-char hex SHA-256 fingerprint of source_uid."""
     return hashlib.sha256(source_uid.encode()).hexdigest()[:16]

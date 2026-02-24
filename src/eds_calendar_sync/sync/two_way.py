@@ -25,6 +25,7 @@ from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import parse_component
+from eds_calendar_sync.sync.utils import strip_exdates_for_dates
 
 
 def _process_new_work_event(
@@ -36,10 +37,16 @@ def _process_new_work_event(
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
     orphan_index: dict[str, str] | None = None,
+    valid_exception_dates: set[str] | None = None,
 ):
     """Handle creation of new event in personal calendar from work."""
     personal_uid = str(uuid.uuid4())
     work_ical = work_comp.as_ical_string()
+    # Strip phantom EXDATEs — Exchange adds every explicitly-defined occurrence
+    # to the master's EXDATE list even when the occurrence is a real meeting
+    # (represented by an exception VEVENT with RECURRENCE-ID).  Keeping those
+    # EXDATEs in the personal calendar suppresses GNOME Calendar display.
+    work_ical = strip_exdates_for_dates(work_ical, valid_exception_dates or set())
 
     if config.dry_run:
         logger.info(f"[DRY RUN] [WORK→PERSONAL] Would CREATE: {work_uid} -> {personal_uid}")
@@ -187,6 +194,7 @@ def _process_sync_pair(
     work_client: EDSCalendarClient,
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
+    work_valid_exception_dates: dict[str, set[str]] | None = None,
 ):
     """Process an existing sync pair (check for changes/deletions)."""
     work_uid = state_record["source_uid"]  # DB uses 'source' for work
@@ -294,6 +302,7 @@ def _process_sync_pair(
                     work_events[work_uid],
                     personal_client,
                     state_db,
+                    valid_exception_dates=(work_valid_exception_dates or {}).get(work_uid, set()),
                 )
         return
 
@@ -303,6 +312,16 @@ def _process_sync_pair(
 
     work_ical = work_comp.as_ical_string()
     personal_ical = personal_comp.as_ical_string()
+
+    # Strip phantom EXDATEs before hashing and syncing.  Exchange adds every
+    # explicitly-defined occurrence to the master's EXDATE list even when the
+    # occurrence is a real meeting (exception VEVENT with RECURRENCE-ID).
+    # We strip those dates so the personal calendar shows the correct occurrences.
+    # Using the stripped iCal for the work hash ensures a one-time re-sync on the
+    # first run after this fix (old hash was based on the unstripped iCal).
+    work_ical = strip_exdates_for_dates(
+        work_ical, (work_valid_exception_dates or {}).get(work_uid, set())
+    )
 
     current_work_hash = compute_hash(work_ical)
     current_personal_hash = compute_hash(personal_ical)
@@ -457,12 +476,44 @@ def run_two_way(
         work_events: dict[str, ICalGLib.Component] = {}
         for obj in work_events_list:
             comp = parse_component(obj)
-            # Skip exception VEVENTs (those with RECURRENCE-ID). They share the same UID
-            # as the master VEVENT and would overwrite it, discarding the RRULE. The
-            # master's EXDATE list already accounts for declined/excluded occurrences.
+            # Keep only master VEVENTs (no RECURRENCE-ID).  Exception VEVENTs
+            # share the same UID as the master and would overwrite it.  Their
+            # contribution is captured via work_valid_exception_dates below.
             if comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY):
                 continue
             work_events[comp.get_uid()] = comp
+
+        # Build a map from work UID → set of YYYYMMDD dates that have a valid
+        # (non-managed, non-cancelled, non-free) exception VEVENT.  Exchange
+        # stores every explicitly-defined recurring occurrence as both an EXDATE
+        # in the master VEVENT and a separate exception VEVENT with RECURRENCE-ID.
+        # Those "phantom" EXDATEs suppress GNOME Calendar display even though the
+        # occurrences are real meetings.  We strip them when writing to personal.
+        work_valid_exception_dates: dict[str, set[str]] = {}
+        for _obj in work_events_list:
+            _comp = parse_component(_obj)
+            _rid_prop = _comp.get_first_property(ICalGLib.PropertyKind.RECURRENCEID_PROPERTY)
+            if not _rid_prop:
+                continue  # master VEVENT — handled above
+            if EventSanitizer.is_managed_event(_comp):
+                continue
+            if is_event_cancelled(_comp):
+                continue
+            if is_free_time(_comp):
+                continue
+            _uid = _comp.get_uid()
+            if not _uid:
+                continue
+            try:
+                _rid_t = _rid_prop.get_recurrenceid()
+                _rid_date = f"{_rid_t.get_year():04d}{_rid_t.get_month():02d}{_rid_t.get_day():02d}"
+                work_valid_exception_dates.setdefault(_uid, set()).add(_rid_date)
+            except Exception:
+                pass
+        if work_valid_exception_dates:
+            logger.debug(
+                f"Found valid exception dates for {len(work_valid_exception_dates)} work UIDs"
+            )
 
         logger.info("Fetching personal events...")
         personal_events_list = personal_client.get_all_events()
@@ -498,6 +549,7 @@ def run_two_way(
                 work_client,
                 personal_client,
                 state_db,
+                work_valid_exception_dates=work_valid_exception_dates,
             )
 
             work_uids_processed.add(work_uid)
@@ -523,7 +575,18 @@ def run_two_way(
                     continue
                 # Skip recurring series where every occurrence is excluded
                 # by EXDATE — Exchange rejects creating empty series.
-                if not has_valid_occurrences(work_comp):
+                # Check against the stripped iCal so that series whose EXDATEs
+                # are all "phantom" (covered by valid exception VEVENTs) are
+                # not incorrectly skipped.
+                _valid_ex_dates = work_valid_exception_dates.get(work_uid, set())
+                if _valid_ex_dates:
+                    _stripped = ICalGLib.Component.new_from_string(
+                        strip_exdates_for_dates(work_comp.as_ical_string(), _valid_ex_dates)
+                    )
+                    _has_valid = has_valid_occurrences(_stripped)
+                else:
+                    _has_valid = has_valid_occurrences(work_comp)
+                if not _has_valid:
                     logger.debug(f"Skipping empty recurring work event: {work_uid}")
                     continue
                 _process_new_work_event(
@@ -535,6 +598,7 @@ def run_two_way(
                     personal_client,
                     state_db,
                     orphan_index=personal_orphan_index,
+                    valid_exception_dates=_valid_ex_dates,
                 )
 
         # Phase 3: Process new personal events (not yet synced)
