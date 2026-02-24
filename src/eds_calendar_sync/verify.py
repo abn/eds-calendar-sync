@@ -338,6 +338,8 @@ def run_verify(
 
     orphaned_personal: list[tuple[str, ICalGLib.Component]] = []
     orphaned_source: list[tuple[str, ICalGLib.Component, str]] = []
+    personal_ok_count = 0
+    total_personal_managed = 0
 
     # Work → personal direction (primary)
     for uid, comp in eligible_work.items():
@@ -374,6 +376,8 @@ def run_verify(
         if not _has_occurrence_in_window(comp, window_start, window_end):
             continue
 
+        total_personal_managed += 1
+
         if personal_uid not in db_by_personal_uid:
             orphaned_personal.append((personal_uid, comp))
             continue
@@ -382,6 +386,8 @@ def run_verify(
         expected_work_uid = row["source_uid"]
         if expected_work_uid not in work_events:
             orphaned_source.append((personal_uid, comp, expected_work_uid))
+        else:
+            personal_ok_count += 1
 
     # ------------------------------------------------------------------
     # Step 7 — Display results
@@ -393,6 +399,10 @@ def run_verify(
         console.print(
             f"[bold green]✓[/] All [bold]{total_eligible}[/bold] work event(s) "
             f"confirmed in personal calendar."
+        )
+        console.print(
+            f"[bold green]✓[/] All [bold]{total_personal_managed}[/bold] "
+            f"personal managed event(s) verified."
         )
         return True
 
@@ -483,7 +493,8 @@ def run_verify(
         len(missing) + len(orphaned_db) + len(stale) + len(orphaned_personal) + len(orphaned_source)
     )
     console.print(
-        f"\n[bold]{ok_count}/{total_eligible}[/bold] work event(s) OK · "
+        f"\n[bold]{ok_count}/{total_eligible}[/bold] work event(s) OK\n"
+        f"[bold]{personal_ok_count}/{total_personal_managed}[/bold] personal managed event(s) OK\n"
         f"[bold red]{total_issues}[/bold red] issue(s) found."
     )
     return False
