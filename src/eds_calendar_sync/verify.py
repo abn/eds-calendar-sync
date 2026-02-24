@@ -319,14 +319,19 @@ def run_verify(
         all_state_records = state_db.get_all_state_bidirectional()
 
     # Build lookup dicts from state records.
-    # origin='source' records track work→personal synced events:
+    # origin='source' records: work event → personal managed copy
     #   source_uid = work event UID, target_uid = personal managed event UID
+    # origin='target' records: personal event → work managed copy
+    #   source_uid = personal event UID, target_uid = work managed event UID
     work_to_personal: dict[str, object] = {}  # work_uid → row
-    db_by_personal_uid: dict[str, object] = {}  # personal_uid → row
+    db_by_personal_uid: dict[str, object] = {}  # personal_uid → row (managed copies only)
+    personal_to_work_db: dict[str, object] = {}  # personal_uid → row (user events synced to work)
     for row in all_state_records:
         if row["origin"] == "source":
             work_to_personal[row["source_uid"]] = row
             db_by_personal_uid[row["target_uid"]] = row
+        elif row["origin"] == "target":
+            personal_to_work_db[row["source_uid"]] = row
 
     # ------------------------------------------------------------------
     # Step 6 — Compute delta
@@ -338,8 +343,10 @@ def run_verify(
 
     orphaned_personal: list[tuple[str, ICalGLib.Component]] = []
     orphaned_source: list[tuple[str, ICalGLib.Component, str]] = []
-    personal_ok_count = 0
-    total_personal_managed = 0
+    # Personal → work direction (origin='target' records)
+    p2w_target_gone: list[tuple[str, ICalGLib.Component, str]] = []
+    p2w_ok_count = 0
+    p2w_total = 0
 
     # Work → personal direction (primary)
     for uid, comp in eligible_work.items():
@@ -369,14 +376,13 @@ def run_verify(
 
         ok_count += 1
 
-    # Personal → work direction (secondary: detect orphaned managed personal events)
+    # Personal managed-copy cross-check: detect orphaned personal copies of work events.
+    # These are origin='source' managed events that have lost their DB record or work source.
     for personal_uid, comp in personal_events.items():
         if not EventSanitizer.is_managed_event(comp):
             continue
         if not _has_occurrence_in_window(comp, window_start, window_end):
             continue
-
-        total_personal_managed += 1
 
         if personal_uid not in db_by_personal_uid:
             orphaned_personal.append((personal_uid, comp))
@@ -386,24 +392,41 @@ def run_verify(
         expected_work_uid = row["source_uid"]
         if expected_work_uid not in work_events:
             orphaned_source.append((personal_uid, comp, expected_work_uid))
+
+    # Personal → work direction: check origin='target' records (user-created personal events
+    # that have been synced to the work calendar). For each, verify the work copy still exists.
+    for personal_uid, row in personal_to_work_db.items():
+        if personal_uid not in personal_events:
+            continue  # personal source deleted; no window to filter on, skip silently
+        comp = personal_events[personal_uid]
+        if not _has_occurrence_in_window(comp, window_start, window_end):
+            continue
+
+        p2w_total += 1
+        work_target_uid = row["target_uid"]
+        if work_target_uid not in work_events:
+            p2w_target_gone.append((personal_uid, comp, work_target_uid))
         else:
-            personal_ok_count += 1
+            p2w_ok_count += 1
 
     # ------------------------------------------------------------------
     # Step 7 — Display results
     # ------------------------------------------------------------------
     total_eligible = len(eligible_work)
-    issues = bool(missing or orphaned_db or stale or orphaned_personal or orphaned_source)
+    issues = bool(
+        missing or orphaned_db or stale or orphaned_personal or orphaned_source or p2w_target_gone
+    )
 
     if not issues:
         console.print(
             f"[bold green]✓[/] All [bold]{total_eligible}[/bold] work event(s) "
             f"confirmed in personal calendar."
         )
-        console.print(
-            f"[bold green]✓[/] All [bold]{total_personal_managed}[/bold] "
-            f"personal managed event(s) verified."
-        )
+        if p2w_total > 0:
+            console.print(
+                f"[bold green]✓[/] All [bold]{p2w_total}[/bold] personal event(s) "
+                f"confirmed synced to work calendar."
+            )
         return True
 
     if missing:
@@ -489,12 +512,36 @@ def run_verify(
             )
         console.print(t)
 
+    if p2w_target_gone:
+        t = Table(
+            title="[bold red]P2W_TARGET_GONE[/] — work copy deleted for a personal event",
+            show_header=True,
+            header_style="bold",
+        )
+        t.add_column("Summary", overflow="fold", min_width=30)
+        t.add_column("Date", width=12)
+        t.add_column("Personal UID", overflow="fold")
+        t.add_column("Expected work UID", overflow="fold")
+        for personal_uid, comp, work_target_uid in p2w_target_gone:
+            t.add_row(
+                _get_summary(comp),
+                _get_date_str(comp),
+                _short_uid(personal_uid),
+                _short_uid(work_target_uid),
+            )
+        console.print(t)
+
     total_issues = (
-        len(missing) + len(orphaned_db) + len(stale) + len(orphaned_personal) + len(orphaned_source)
+        len(missing)
+        + len(orphaned_db)
+        + len(stale)
+        + len(orphaned_personal)
+        + len(orphaned_source)
+        + len(p2w_target_gone)
     )
-    console.print(
-        f"\n[bold]{ok_count}/{total_eligible}[/bold] work event(s) OK\n"
-        f"[bold]{personal_ok_count}/{total_personal_managed}[/bold] personal managed event(s) OK\n"
-        f"[bold red]{total_issues}[/bold red] issue(s) found."
-    )
+    summary = f"\n[bold]{ok_count}/{total_eligible}[/bold] work event(s) OK"
+    if p2w_total > 0:
+        summary += f"\n[bold]{p2w_ok_count}/{p2w_total}[/bold] personal event(s) synced to work OK"
+    summary += f"\n[bold red]{total_issues}[/bold red] issue(s) found."
+    console.print(summary)
     return False
