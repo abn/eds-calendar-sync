@@ -22,6 +22,7 @@ from eds_calendar_sync.db import query_status_all_pairs
 from eds_calendar_sync.eds_client import get_calendar_display_info
 from eds_calendar_sync.models import DEFAULT_CONFIG
 from eds_calendar_sync.models import DEFAULT_STATE_DB
+from eds_calendar_sync.models import CalendarPairConfig
 from eds_calendar_sync.models import CalendarSyncError
 from eds_calendar_sync.models import SyncConfig
 from eds_calendar_sync.sync import CalendarSynchronizer
@@ -90,6 +91,7 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _load_config_file(config_path: Path) -> dict[str, str]:
+    """Return the raw [calendar-sync] key/value dict (backwards compat helper)."""
     if not config_path.exists():
         return {}
     parser = ConfigParser()
@@ -97,6 +99,135 @@ def _load_config_file(config_path: Path) -> dict[str, str]:
     if "calendar-sync" not in parser:
         return {}
     return dict(parser["calendar-sync"])
+
+
+def _load_app_config(
+    config_path: Path,
+) -> tuple[dict[str, str], list[CalendarPairConfig]]:
+    """Parse the config file and return (global_defaults, pairs).
+
+    global_defaults: all keys from [calendar-sync]
+    pairs: one CalendarPairConfig per [pair:<name>] section, or a single
+           synthetic "default" pair if old-style IDs live in [calendar-sync].
+    """
+    if not config_path.exists():
+        return {}, []
+
+    parser = ConfigParser()
+    parser.read(config_path)
+
+    global_defaults: dict[str, str] = (
+        dict(parser["calendar-sync"]) if "calendar-sync" in parser else {}
+    )
+
+    pairs: list[CalendarPairConfig] = []
+    for section in parser.sections():
+        if not section.startswith("pair:"):
+            continue
+        pair_name = section[len("pair:") :]
+        sec = dict(parser[section])
+        work_id = sec.get("work_calendar_id") or global_defaults.get("work_calendar_id")
+        personal_id = sec.get("personal_calendar_id") or global_defaults.get("personal_calendar_id")
+        if not work_id or not personal_id:
+            console.print(
+                f"[bold red]Error:[/] [pair:{pair_name}] must have "
+                "[cyan]work_calendar_id[/] and [cyan]personal_calendar_id[/]."
+            )
+            raise typer.Exit(1)
+
+        raw_direction = sec.get("sync_direction")
+        raw_email = sec.get("work_account_email") or None
+        raw_keep = sec.get("keep_reminders")
+        keep: bool | None = None
+        if raw_keep is not None:
+            keep = raw_keep.lower() in ("1", "yes", "true", "on")
+
+        pairs.append(
+            CalendarPairConfig(
+                name=pair_name,
+                work_calendar_id=work_id,
+                personal_calendar_id=personal_id,
+                sync_direction=raw_direction,
+                work_account_email=raw_email,
+                keep_reminders=keep,
+            )
+        )
+
+    # Backwards compat: no [pair:*] sections but IDs in [calendar-sync]
+    if not pairs:
+        work_id = global_defaults.get("work_calendar_id")
+        personal_id = global_defaults.get("personal_calendar_id")
+        if work_id and personal_id:
+            raw_keep = global_defaults.get("keep_reminders")
+            keep = raw_keep.lower() in ("1", "yes", "true", "on") if raw_keep else None
+            pairs.append(
+                CalendarPairConfig(
+                    name="default",
+                    work_calendar_id=work_id,
+                    personal_calendar_id=personal_id,
+                    sync_direction=global_defaults.get("sync_direction"),
+                    work_account_email=global_defaults.get("work_account_email") or None,
+                    keep_reminders=keep,
+                )
+            )
+
+    return global_defaults, pairs
+
+
+def _build_config_for_pair(
+    pair: CalendarPairConfig,
+    global_defaults: dict[str, str],
+    *,
+    to_personal: bool,
+    to_work: bool,
+    dry_run: bool,
+    refresh: bool,
+    clear: bool,
+    yes: bool,
+    keep_reminders: bool,
+) -> SyncConfig:
+    """Build a SyncConfig with resolution: CLI > pair-level > global > built-in."""
+    # Direction: CLI flags take precedence over pair/global config
+    if to_personal and to_work:
+        raise typer.BadParameter("--to-personal and --to-work are mutually exclusive")
+    if to_personal:
+        direction = "to-personal"
+    elif to_work:
+        direction = "to-work"
+    else:
+        # pair-level → global → built-in default
+        direction = pair.sync_direction or global_defaults.get("sync_direction") or "both"
+
+    # keep_reminders: CLI flag (True) wins; otherwise pair → global → False
+    if not keep_reminders:
+        if pair.keep_reminders is not None:
+            keep_reminders = pair.keep_reminders
+        else:
+            raw = global_defaults.get("keep_reminders", "")
+            keep_reminders = raw.lower() in ("1", "yes", "true", "on")
+
+    # work_account_email: pair → global → None
+    work_account_email: str | None = pair.work_account_email or (
+        global_defaults.get("work_account_email") or None
+    )
+
+    # state_db_path: global config → CLI --state-db → built-in default
+    raw_db = global_defaults.get("state_db_path")
+    db_path = Path(raw_db).expanduser() if raw_db else state.state_db
+
+    return SyncConfig(
+        work_calendar_id=pair.work_calendar_id,
+        personal_calendar_id=pair.personal_calendar_id,
+        state_db_path=db_path,
+        dry_run=dry_run,
+        refresh=refresh,
+        verbose=state.verbose,
+        sync_direction=direction,
+        clear=clear,
+        yes=yes,
+        keep_reminders=keep_reminders,
+        work_account_email=work_account_email,
+    )
 
 
 def _build_config(
@@ -110,13 +241,18 @@ def _build_config(
     yes: bool,
     keep_reminders: bool = False,
 ) -> SyncConfig:
+    """Build SyncConfig for an ad-hoc single pair (CLI flags or config fallback)."""
     if to_personal and to_work:
         raise typer.BadParameter("--to-personal and --to-work are mutually exclusive")
 
-    config_file = _load_config_file(state.config_path)
-    work_id = work_calendar or config_file.get("work_calendar_id")
-    personal_id = personal_calendar or config_file.get("personal_calendar_id")
-    work_account_email: str | None = config_file.get("work_account_email") or None
+    global_defaults, pairs = _load_app_config(state.config_path)
+    work_id = work_calendar or global_defaults.get("work_calendar_id")
+    personal_id = personal_calendar or global_defaults.get("personal_calendar_id")
+
+    # Also check first pair for IDs if not in global section
+    if (not work_id or not personal_id) and pairs:
+        work_id = work_id or pairs[0].work_calendar_id
+        personal_id = personal_id or pairs[0].personal_calendar_id
 
     if not work_id or not personal_id:
         console.print(
@@ -125,25 +261,21 @@ def _build_config(
         )
         raise typer.Exit(1)
 
-    if to_personal:
-        direction = "to-personal"
-    elif to_work:
-        direction = "to-work"
-    else:
-        direction = "both"
-
-    return SyncConfig(
+    pair = CalendarPairConfig(
+        name="default",
         work_calendar_id=work_id,
         personal_calendar_id=personal_id,
-        state_db_path=state.state_db,
+    )
+    return _build_config_for_pair(
+        pair,
+        global_defaults,
+        to_personal=to_personal,
+        to_work=to_work,
         dry_run=dry_run,
         refresh=refresh,
-        verbose=state.verbose,
-        sync_direction=direction,
         clear=clear,
         yes=yes,
         keep_reminders=keep_reminders,
-        work_account_email=work_account_email,
     )
 
 
@@ -289,6 +421,105 @@ _KEEP_REMINDERS = Annotated[
         ),
     ),
 ]
+_PAIR_OPT = Annotated[
+    str | None,
+    typer.Option("--pair", help="Run only the named pair from config (e.g. --pair work)"),
+]
+
+
+def _run_multi_pair(
+    pairs: list[CalendarPairConfig],
+    global_defaults: dict[str, str],
+    *,
+    pair_name: str | None,
+    to_personal: bool,
+    to_work: bool,
+    dry_run: bool,
+    refresh: bool,
+    clear: bool,
+    yes: bool,
+    keep_reminders: bool,
+) -> None:
+    """Run sync/refresh/clear across one or more named pairs from the config."""
+    if pair_name is not None:
+        matches = [p for p in pairs if p.name == pair_name]
+        if not matches:
+            available = ", ".join(p.name for p in pairs)
+            console.print(
+                f"[bold red]Error:[/] No pair named [cyan]{pair_name!r}[/] in config. "
+                f"Available: {available}"
+            )
+            raise typer.Exit(1)
+        pairs = matches
+
+    if len(pairs) == 1:
+        cfg = _build_config_for_pair(
+            pairs[0],
+            global_defaults,
+            to_personal=to_personal,
+            to_work=to_work,
+            dry_run=dry_run,
+            refresh=refresh,
+            clear=clear,
+            yes=yes,
+            keep_reminders=keep_reminders,
+        )
+        _run_sync(cfg)
+        return
+
+    # Multiple pairs: show a summary table, confirm once, run sequentially.
+    summary = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    summary.add_column("Pair")
+    summary.add_column("Work calendar ID", overflow="fold")
+    summary.add_column("Personal calendar ID", overflow="fold")
+    summary.add_column("Direction")
+    for p in pairs:
+        direction = p.sync_direction or global_defaults.get("sync_direction") or "both"
+        if to_personal:
+            direction = "to-personal"
+        elif to_work:
+            direction = "to-work"
+        dir_label = {
+            "both": "↔ Both",
+            "to-personal": "→ Work→Personal",
+            "to-work": "← Personal→Work",
+        }.get(direction, direction)
+        summary.add_row(p.name, p.work_calendar_id, p.personal_calendar_id, dir_label)
+
+    op = "DRY RUN " if dry_run else ""
+    console.print(
+        Panel(
+            summary,
+            title=f"[bold]EDS Calendar Sync — {op}{len(pairs)} pairs[/bold]",
+        )
+    )
+
+    if not yes and not dry_run:
+        typer.confirm(f"Run for all {len(pairs)} pair(s)?", abort=True)
+
+    total_errors = 0
+    for pair in pairs:
+        console.rule(f"[bold]Pair: {pair.name}[/bold]")
+        cfg = _build_config_for_pair(
+            pair,
+            global_defaults,
+            to_personal=to_personal,
+            to_work=to_work,
+            dry_run=dry_run,
+            refresh=refresh,
+            clear=clear,
+            yes=True,  # already confirmed above
+            keep_reminders=keep_reminders,
+        )
+        try:
+            _run_sync(cfg)
+        except SystemExit as e:
+            if e.code and e.code != 0:
+                total_errors += 1
+
+    if total_errors:
+        console.print(f"\n[bold red]{total_errors} pair(s) finished with errors.[/bold red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -300,13 +531,49 @@ def sync(
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
     keep_reminders: _KEEP_REMINDERS = False,
+    pair: _PAIR_OPT = None,
 ) -> None:
     """Synchronise calendars (bidirectional by default).
 
     With no arguments, launches an interactive wizard to select the
     calendar pair and sync direction.
     """
-    if work_calendar is None and personal_calendar is None and not to_personal and not to_work:
+    # Ad-hoc single pair via CLI flags
+    if work_calendar is not None or personal_calendar is not None:
+        _run_sync(
+            _build_config(
+                work_calendar,
+                personal_calendar,
+                to_personal,
+                to_work,
+                dry_run=dry_run,
+                refresh=False,
+                clear=False,
+                yes=yes,
+                keep_reminders=keep_reminders,
+            )
+        )
+        return
+
+    global_defaults, pairs = _load_app_config(state.config_path)
+
+    if pairs:
+        _run_multi_pair(
+            pairs,
+            global_defaults,
+            pair_name=pair,
+            to_personal=to_personal,
+            to_work=to_work,
+            dry_run=dry_run,
+            refresh=False,
+            clear=False,
+            yes=yes,
+            keep_reminders=keep_reminders,
+        )
+        return
+
+    # No config pairs — fall back to interactive wizard
+    if not to_personal and not to_work:
         work_calendar, personal_calendar, direction = _interactive_sync_setup()
         to_personal = direction == "to-personal"
         to_work = direction == "to-work"
@@ -336,8 +603,41 @@ def refresh(
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
     keep_reminders: _KEEP_REMINDERS = False,
+    pair: _PAIR_OPT = None,
 ) -> None:
     """Remove synced events then re-sync from scratch."""
+    if work_calendar is not None or personal_calendar is not None:
+        _run_sync(
+            _build_config(
+                work_calendar,
+                personal_calendar,
+                to_personal,
+                to_work,
+                dry_run=dry_run,
+                refresh=True,
+                clear=False,
+                yes=yes,
+                keep_reminders=keep_reminders,
+            )
+        )
+        return
+
+    global_defaults, pairs = _load_app_config(state.config_path)
+    if pairs:
+        _run_multi_pair(
+            pairs,
+            global_defaults,
+            pair_name=pair,
+            to_personal=to_personal,
+            to_work=to_work,
+            dry_run=dry_run,
+            refresh=True,
+            clear=False,
+            yes=yes,
+            keep_reminders=keep_reminders,
+        )
+        return
+
     _run_sync(
         _build_config(
             work_calendar,
@@ -361,12 +661,44 @@ def clear(
     work: _CLEAR_WORK = False,
     dry_run: _DRY_RUN = False,
     yes: _YES = False,
+    pair: _PAIR_OPT = None,
 ) -> None:
     """Remove managed events from calendars without re-syncing.
 
     By default clears managed events from [bold]both[/bold] calendars.
     Use [cyan]--personal[/] or [cyan]--work[/] to restrict to one calendar.
     """
+    if work_calendar is not None or personal_calendar is not None:
+        _run_sync(
+            _build_config(
+                work_calendar,
+                personal_calendar,
+                to_personal=personal,
+                to_work=work,
+                dry_run=dry_run,
+                refresh=False,
+                clear=True,
+                yes=yes,
+            )
+        )
+        return
+
+    global_defaults, pairs = _load_app_config(state.config_path)
+    if pairs:
+        _run_multi_pair(
+            pairs,
+            global_defaults,
+            pair_name=pair,
+            to_personal=personal,
+            to_work=work,
+            dry_run=dry_run,
+            refresh=False,
+            clear=True,
+            yes=yes,
+            keep_reminders=False,
+        )
+        return
+
     _run_sync(
         _build_config(
             work_calendar,
@@ -461,9 +793,14 @@ def _interactive_sync_setup() -> tuple[str, str, str]:
     Returns (work_id, personal_id, direction) where direction is one of
     'both', 'to-personal', 'to-work'.
     """
-    config_file = _load_config_file(state.config_path)
-    config_work = config_file.get("work_calendar_id")
-    config_personal = config_file.get("personal_calendar_id")
+    global_defaults, pairs = _load_app_config(state.config_path)
+    first_pair = pairs[0] if pairs else None
+    config_work = (first_pair.work_calendar_id if first_pair else None) or global_defaults.get(
+        "work_calendar_id"
+    )
+    config_personal = (
+        first_pair.personal_calendar_id if first_pair else None
+    ) or global_defaults.get("personal_calendar_id")
 
     _, eds_entries = _load_eds_calendars()
     if not eds_entries:
@@ -683,35 +1020,38 @@ def status() -> None:
     cfg_info.append(str(state.state_db) + " ")
     cfg_info.append("✓" if db_exists else "(not found)", style="green" if db_exists else "yellow")
 
-    # Try to resolve the configured calendar pair's display names via EDS.
-    config_file = _load_config_file(state.config_path)
-    work_id = config_file.get("work_calendar_id")
-    personal_id = config_file.get("personal_calendar_id")
+    # Try to resolve the configured calendar pairs' display names via EDS.
+    _, config_pairs = _load_app_config(state.config_path)
 
-    if work_id or personal_id:
+    if config_pairs:
         cfg_info.append("\n")
 
-    if work_id:
+    for cp in config_pairs:
+        pair_label = f"[pair:{cp.name}]" if cp.name != "default" else "Pair"
+        cfg_info.append(f"\n  {pair_label}\n", style="bold")
+
         try:
-            work_name, work_account, _ = get_calendar_display_info(work_id)
+            work_name, work_account, _ = get_calendar_display_info(cp.work_calendar_id)
             work_display = work_name + (f" ({work_account})" if work_account else "")
         except Exception:
-            work_display = work_id
-        cfg_info.append("\n  Work:     ", style="bold")
+            work_display = cp.work_calendar_id
+        cfg_info.append("    Work:     ", style="bold")
         cfg_info.append(work_display + "\n")
-        cfg_info.append(f"            {work_id}", style="dim")
+        cfg_info.append(f"              {cp.work_calendar_id}\n", style="dim")
 
-    if personal_id:
         try:
-            pers_name, pers_account, _ = get_calendar_display_info(personal_id)
+            pers_name, pers_account, _ = get_calendar_display_info(cp.personal_calendar_id)
             pers_display = pers_name + (f" ({pers_account})" if pers_account else "")
         except Exception:
-            pers_display = personal_id
-        cfg_info.append("\n  Personal: ", style="bold")
+            pers_display = cp.personal_calendar_id
+        cfg_info.append("    Personal: ", style="bold")
         cfg_info.append(pers_display + "\n")
-        cfg_info.append(f"            {personal_id}", style="dim")
+        cfg_info.append(f"              {cp.personal_calendar_id}", style="dim")
 
     console.print(Panel(cfg_info, title="[bold]EDS Calendar Sync — Status[/bold]"))
+
+    # Keep a set of configured pair IDs to mark them in the DB section.
+    configured_pairs = {(cp.work_calendar_id, cp.personal_calendar_id) for cp in config_pairs}
 
     # -- State DB section ----------------------------------------------------
     rows = query_status_all_pairs(state.state_db)
@@ -750,7 +1090,7 @@ def status() -> None:
         except Exception:
             p_label = _short(p_id)
 
-        is_configured_pair = w_id == work_id and p_id == personal_id
+        is_configured_pair = (w_id, p_id) in configured_pairs
         pair_title = f"[bold]{w_label}[/bold] ↔ [bold]{p_label}[/bold]"
         if is_configured_pair:
             pair_title += "  [green](configured)[/green]"
@@ -903,9 +1243,18 @@ def verify(
 
     from eds_calendar_sync.verify import run_verify
 
-    config_file = _load_config_file(state.config_path)
-    work_id = work_calendar or config_file.get("work_calendar_id")
-    personal_id = personal_calendar or config_file.get("personal_calendar_id")
+    global_defaults, pairs = _load_app_config(state.config_path)
+    first_pair = pairs[0] if pairs else None
+    work_id = (
+        work_calendar
+        or (first_pair.work_calendar_id if first_pair else None)
+        or global_defaults.get("work_calendar_id")
+    )
+    personal_id = (
+        personal_calendar
+        or (first_pair.personal_calendar_id if first_pair else None)
+        or global_defaults.get("personal_calendar_id")
+    )
     if not work_id or not personal_id:
         console.print("[bold red]Error:[/] Work and personal calendar IDs required.")
         raise typer.Exit(1)

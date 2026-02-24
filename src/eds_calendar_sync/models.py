@@ -33,6 +33,19 @@ class SyncConfig:
 
 
 @dataclass
+class CalendarPairConfig:
+    """Configuration for a single named calendar pair (loaded from config file)."""
+
+    name: str
+    work_calendar_id: str
+    personal_calendar_id: str
+    # Per-pair overrides; None means "use global default"
+    sync_direction: str | None = None
+    work_account_email: str | None = None
+    keep_reminders: bool | None = None
+
+
+@dataclass
 class SyncStats:
     """Statistics for sync operation."""
 

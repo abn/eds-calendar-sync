@@ -1,13 +1,66 @@
-# Calendar Sync Configuration
-# Copy this file to ~/.config/eds-calendar-sync.conf and customize
+# EDS Calendar Sync — Configuration
+# Copy this file to ~/.config/eds-calendar-sync.conf and customise.
+#
+# There are two supported formats:
+#
+#   1. Single-pair (backwards-compatible): put both calendar IDs in [calendar-sync].
+#   2. Multi-pair: keep global defaults in [calendar-sync] and add one
+#      [pair:<name>] section per calendar pair.
+#
+# Use `eds-calendar-sync calendars` to list available calendar UIDs.
+
+# ---------------------------------------------------------------------------
+# [calendar-sync] — Global defaults (apply to every pair unless overridden)
+# ---------------------------------------------------------------------------
 
 [calendar-sync]
-# EDS calendar UID for work calendar (Exchange/Outlook/Microsoft 365)
-# Use list-calendars.py to find your calendar UIDs
-work_calendar_id = YOUR_WORK_CALENDAR_UID_HERE
 
-# EDS calendar UID for personal calendar (Google/Personal)
-personal_calendar_id = YOUR_PERSONAL_CALENDAR_UID_HERE
+# Sync direction: both | to-personal | to-work  (default: both)
+# sync_direction = both
 
-# Optional: Specify state database path
+# Preserve VALARM reminders on synced copies (default: false — strips them to
+# avoid duplicate notifications).
+# keep_reminders = false
+
+# Override the state database path (default: ~/.local/share/eds-calendar-sync-state.db)
 # state_db_path = ~/.local/share/eds-calendar-sync-state.db
+
+# E-mail address of the work account owner — used to detect PARTSTAT=DECLINED
+# exceptions on recurring Exchange events.  Detected automatically when not set.
+# work_account_email = you@company.com
+
+
+# ---------------------------------------------------------------------------
+# Option A — Single-pair (no [pair:*] sections needed)
+#
+# If you only sync one pair, put the calendar IDs directly in [calendar-sync].
+# This is the backwards-compatible format; existing configs need no changes.
+# ---------------------------------------------------------------------------
+
+# work_calendar_id     = YOUR_WORK_CALENDAR_UID_HERE
+# personal_calendar_id = YOUR_PERSONAL_CALENDAR_UID_HERE
+
+
+# ---------------------------------------------------------------------------
+# Option B — Multi-pair  ([pair:<name>] sections)
+#
+# Each section defines one work/personal pair.  Per-pair keys override the
+# global defaults in [calendar-sync] for that pair only.
+#
+# Supported per-pair overrides:
+#   work_calendar_id      (required)
+#   personal_calendar_id  (required)
+#   sync_direction        (optional — overrides global)
+#   work_account_email    (optional — overrides global)
+#   keep_reminders        (optional — overrides global)
+# ---------------------------------------------------------------------------
+
+# [pair:work]
+# work_calendar_id     = EXCHANGE_CALENDAR_UID
+# personal_calendar_id = GOOGLE_CALENDAR_UID
+# work_account_email   = you@company.com
+
+# [pair:secondary]
+# work_calendar_id     = SECONDARY_EXCHANGE_UID
+# personal_calendar_id = HOME_GOOGLE_CALENDAR_UID
+# sync_direction       = to-personal   # only mirror work → personal for this pair
