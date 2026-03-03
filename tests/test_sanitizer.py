@@ -24,9 +24,33 @@ _DTSTART = "20260301T100000Z"
 _DTEND = "20260301T110000Z"
 _DTSTAMP = "20260224T000000Z"
 
+# Minimal VALARM sub-component strings (no trailing \r\n — _make_vevent adds separators).
+_VALARM_DISPLAY = (
+    "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nDESCRIPTION:Reminder\r\nEND:VALARM"
+)
+_VALARM_EMAIL = (
+    "BEGIN:VALARM\r\n"
+    "ACTION:EMAIL\r\n"
+    "TRIGGER:-PT30M\r\n"
+    "SUMMARY:Alarm\r\n"
+    "DESCRIPTION:Meeting reminder\r\n"
+    "END:VALARM"
+)
 
-def _make_vevent(uid: str, extra_lines: list[str] = (), summary: str = "Test Event") -> str:
-    """Return a minimal VEVENT string with optional extra property lines."""
+
+def _make_vevent(
+    uid: str,
+    extra_lines: list[str] = (),
+    summary: str = "Test Event",
+    subcomponents: list[str] = (),
+) -> str:
+    """Return a minimal VEVENT string with optional extra property lines and sub-components.
+
+    subcomponents: list of raw iCal sub-component strings (e.g. VALARM blocks) to
+    embed before END:VEVENT.  Each entry should include its own BEGIN:/END: lines
+    and use \\r\\n line endings internally, but must NOT end with a trailing \\r\\n
+    (the separator is added here).
+    """
     lines = [
         "BEGIN:VEVENT",
         f"UID:{uid}",
@@ -36,8 +60,11 @@ def _make_vevent(uid: str, extra_lines: list[str] = (), summary: str = "Test Eve
         f"DTSTAMP:{_DTSTAMP}",
     ]
     lines.extend(extra_lines)
-    lines.append("END:VEVENT")
-    return "\r\n".join(lines) + "\r\n"
+    result = "\r\n".join(lines)
+    for sc in subcomponents:
+        result += "\r\n" + sc
+    result += "\r\nEND:VEVENT\r\n"
+    return result
 
 
 def _sanitize(
@@ -45,6 +72,7 @@ def _sanitize(
     mode: str = "normal",
     source_uid: str | None = None,
     private_work_sync: bool = False,
+    keep_reminders: bool = False,
 ) -> ICalGLib.Component:
     """Call EventSanitizer.sanitize with a fresh UUID and return the component."""
     return EventSanitizer.sanitize(
@@ -53,6 +81,7 @@ def _sanitize(
         mode=mode,
         source_uid=source_uid,
         private_work_sync=private_work_sync,
+        keep_reminders=keep_reminders,
     )
 
 
@@ -312,3 +341,70 @@ class TestSanitizeManagedMarkers:
                 f"Unexpected fingerprint category: {cat}"
             )
             prop = result.get_next_property(ICalGLib.PropertyKind.CATEGORIES_PROPERTY)
+
+
+# ---------------------------------------------------------------------------
+# TestSanitizeAlarms
+# ---------------------------------------------------------------------------
+
+
+def _count_valarms(comp: ICalGLib.Component) -> int:
+    """Return the number of VALARM sub-components on comp."""
+    count = 0
+    sub = comp.get_first_component(ICalGLib.ComponentKind.VALARM_COMPONENT)
+    while sub:
+        count += 1
+        sub = comp.get_next_component(ICalGLib.ComponentKind.VALARM_COMPONENT)
+    return count
+
+
+class TestSanitizeAlarms:
+    """VALARM sub-components are stripped by default; preserved with keep_reminders=True."""
+
+    def test_alarm_stripped_by_default(self):
+        """A single VALARM is removed when keep_reminders is not set (defaults to False)."""
+        ical = _make_vevent("AL1", subcomponents=[_VALARM_DISPLAY])
+        result = _sanitize(ical)
+        assert _count_valarms(result) == 0
+
+    def test_alarm_stripped_explicit_false(self):
+        """A single VALARM is removed when keep_reminders=False is explicit."""
+        ical = _make_vevent("AL2", subcomponents=[_VALARM_DISPLAY])
+        result = _sanitize(ical, keep_reminders=False)
+        assert _count_valarms(result) == 0
+
+    def test_alarm_preserved_when_keep_reminders(self):
+        """A single VALARM is kept when keep_reminders=True."""
+        ical = _make_vevent("AL3", subcomponents=[_VALARM_DISPLAY])
+        result = _sanitize(ical, keep_reminders=True)
+        assert _count_valarms(result) == 1
+
+    def test_multiple_alarms_all_stripped(self):
+        """All VALARM sub-components are removed (not just the first) by default."""
+        ical = _make_vevent("AL4", subcomponents=[_VALARM_DISPLAY, _VALARM_EMAIL])
+        result = _sanitize(ical)
+        assert _count_valarms(result) == 0
+
+    def test_multiple_alarms_all_preserved(self):
+        """All VALARM sub-components are kept when keep_reminders=True."""
+        ical = _make_vevent("AL5", subcomponents=[_VALARM_DISPLAY, _VALARM_EMAIL])
+        result = _sanitize(ical, keep_reminders=True)
+        assert _count_valarms(result) == 2
+
+    def test_no_alarm_no_error(self):
+        """sanitize() with keep_reminders=False on an event with no VALARM is a no-op."""
+        ical = _make_vevent("AL6")
+        result = _sanitize(ical)
+        assert _count_valarms(result) == 0
+
+    def test_alarm_stripped_in_busy_mode(self):
+        """VALARM is stripped in busy mode (personal→work) regardless of mode."""
+        ical = _make_vevent("AL7", subcomponents=[_VALARM_DISPLAY])
+        result = _sanitize(ical, mode="busy")
+        assert _count_valarms(result) == 0
+
+    def test_alarm_preserved_in_busy_mode_with_keep_reminders(self):
+        """VALARM is preserved in busy mode when keep_reminders=True."""
+        ical = _make_vevent("AL8", subcomponents=[_VALARM_DISPLAY])
+        result = _sanitize(ical, mode="busy", keep_reminders=True)
+        assert _count_valarms(result) == 1
