@@ -40,9 +40,20 @@ def _make_vevent(uid: str, extra_lines: list[str] = (), summary: str = "Test Eve
     return "\r\n".join(lines) + "\r\n"
 
 
-def _sanitize(ical: str, mode: str = "normal", source_uid: str | None = None) -> ICalGLib.Component:
+def _sanitize(
+    ical: str,
+    mode: str = "normal",
+    source_uid: str | None = None,
+    private_work_sync: bool = False,
+) -> ICalGLib.Component:
     """Call EventSanitizer.sanitize with a fresh UUID and return the component."""
-    return EventSanitizer.sanitize(ical, str(uuid.uuid4()), mode=mode, source_uid=source_uid)
+    return EventSanitizer.sanitize(
+        ical,
+        str(uuid.uuid4()),
+        mode=mode,
+        source_uid=source_uid,
+        private_work_sync=private_work_sync,
+    )
 
 
 def _has_category(comp: ICalGLib.Component, value: str) -> bool:
@@ -112,13 +123,13 @@ class TestIsManagedEvent:
 class TestSanitizePropertyStripping:
     """Verify that sanitize() removes sensitive / protocol-specific properties."""
 
-    def test_strips_description(self):
+    def test_keeps_description_in_normal_mode(self):
         result = _sanitize(_make_vevent("SD1", ["DESCRIPTION:Secret meeting notes"]))
-        assert not _has_property(result, ICalGLib.PropertyKind.DESCRIPTION_PROPERTY)
+        assert _has_property(result, ICalGLib.PropertyKind.DESCRIPTION_PROPERTY)
 
-    def test_strips_location(self):
+    def test_keeps_location_in_normal_mode(self):
         result = _sanitize(_make_vevent("SL1", ["LOCATION:Conference Room 42"]))
-        assert not _has_property(result, ICalGLib.PropertyKind.LOCATION_PROPERTY)
+        assert _has_property(result, ICalGLib.PropertyKind.LOCATION_PROPERTY)
 
     def test_strips_attendees(self):
         result = _sanitize(
@@ -212,6 +223,54 @@ class TestSanitizeModes:
         prop = result.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY)
         assert prop is not None
         assert prop.get_summary() == "Busy"
+
+
+# ---------------------------------------------------------------------------
+# TestSanitizePrivateWorkSync
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizePrivateWorkSync:
+    """Verify private_work_sync=True hides work event details in normal mode."""
+
+    def test_private_strips_description(self):
+        result = _sanitize(
+            _make_vevent("PWD1", ["DESCRIPTION:Confidential notes"]),
+            private_work_sync=True,
+        )
+        assert not _has_property(result, ICalGLib.PropertyKind.DESCRIPTION_PROPERTY)
+
+    def test_private_strips_location(self):
+        result = _sanitize(
+            _make_vevent("PWL1", ["LOCATION:Executive Boardroom"]),
+            private_work_sync=True,
+        )
+        assert not _has_property(result, ICalGLib.PropertyKind.LOCATION_PROPERTY)
+
+    def test_private_replaces_summary(self):
+        result = _sanitize(
+            _make_vevent("PWS1", summary="Quarterly Review"),
+            private_work_sync=True,
+        )
+        prop = result.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY)
+        assert prop is not None
+        assert prop.get_summary() == "Work Commitment"
+
+    def test_busy_still_strips_description(self):
+        """mode='busy' must strip DESCRIPTION regardless of private_work_sync."""
+        result = _sanitize(
+            _make_vevent("BSD1", ["DESCRIPTION:Personal notes"]),
+            mode="busy",
+        )
+        assert not _has_property(result, ICalGLib.PropertyKind.DESCRIPTION_PROPERTY)
+
+    def test_busy_still_strips_location(self):
+        """mode='busy' must strip LOCATION regardless of private_work_sync."""
+        result = _sanitize(
+            _make_vevent("BSL1", ["LOCATION:Home office"]),
+            mode="busy",
+        )
+        assert not _has_property(result, ICalGLib.PropertyKind.LOCATION_PROPERTY)
 
 
 # ---------------------------------------------------------------------------

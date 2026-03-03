@@ -22,6 +22,12 @@
 # avoid duplicate notifications).
 # keep_reminders = false
 
+# When syncing work → personal, hide event details for privacy.
+# When enabled, personal events show "Work Commitment" (no title, location, or
+# description) instead of the real work event details.  Useful when your
+# personal calendar is visible to others.  (default: false)
+# private_work_sync = false
+
 # Override the state database path (default: ~/.local/share/eds-calendar-sync-state.db)
 # state_db_path = ~/.local/share/eds-calendar-sync-state.db
 
@@ -53,6 +59,7 @@
 #   sync_direction        (optional — overrides global)
 #   work_account_email    (optional — overrides global)
 #   keep_reminders        (optional — overrides global)
+#   private_work_sync     (optional — overrides global)
 # ---------------------------------------------------------------------------
 
 # [pair:work]

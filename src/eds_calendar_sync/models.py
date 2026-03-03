@@ -29,6 +29,7 @@ class SyncConfig:
     clear: bool = False
     yes: bool = False  # Auto-confirm without prompting
     keep_reminders: bool = False  # Preserve VALARM sub-components (stripped by default)
+    private_work_sync: bool = False  # Replace title/strip details for work→personal privacy
     work_account_email: str | None = None  # for PARTSTAT=DECLINED detection
 
 
@@ -43,6 +44,7 @@ class CalendarPairConfig:
     sync_direction: str | None = None
     work_account_email: str | None = None
     keep_reminders: bool | None = None
+    private_work_sync: bool | None = None
 
 
 @dataclass

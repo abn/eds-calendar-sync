@@ -71,6 +71,7 @@ class EventSanitizer:
         mode: str = "normal",
         keep_reminders: bool = False,
         source_uid: str | None = None,
+        private_work_sync: bool = False,
     ) -> ICalGLib.Component:
         """
         Parse an iCal string, replace UID, and strip sensitive data.
@@ -78,14 +79,19 @@ class EventSanitizer:
         Args:
             ical_string: Raw iCal data from source calendar
             new_uid: New UUID to assign to the event
-            mode: 'normal' = source→target (strip details, keep title)
-                  'busy' = target→source (strip everything, title becomes "Busy")
+            mode: 'normal' = work→personal (keep title; location/description kept
+                  unless private_work_sync is True)
+                  'busy' = personal→work (strip everything, title becomes "Busy")
             keep_reminders: When True, preserve VALARM sub-components.
                   Defaults to False — reminders are stripped to prevent
                   duplicate notifications on the target calendar.
             source_uid: When provided, a SHA-256 fingerprint of this UID is
                   embedded as a CATEGORIES:CALENDAR-SYNC-SRC-<hex16> property.
                   Used for orphan recovery after a crash-before-commit.
+            private_work_sync: When True (work→personal), replace SUMMARY with
+                  "Work Commitment" and strip LOCATION and DESCRIPTION so that
+                  personal calendar viewers cannot see work event details.
+                  Has no effect when mode='busy'.
 
         Returns:
             Sanitized ICalGLib.Component ready for target calendar
@@ -101,9 +107,8 @@ class EventSanitizer:
         # RECURRENCE-ID) are created as ordinary one-off events so the target
         # Exchange/CalDAV backend does not reject them with "ExpandSeries can
         # only be performed against a series".
+        # Always strip these (sensitive protocol/tracking data)
         strip_props = [
-            ICalGLib.PropertyKind.DESCRIPTION_PROPERTY,
-            ICalGLib.PropertyKind.LOCATION_PROPERTY,
             ICalGLib.PropertyKind.ATTACH_PROPERTY,
             ICalGLib.PropertyKind.URL_PROPERTY,
             ICalGLib.PropertyKind.ORGANIZER_PROPERTY,
@@ -121,6 +126,14 @@ class EventSanitizer:
             # to resolve those references.
             ICalGLib.PropertyKind.X_PROPERTY,
         ]
+
+        # Strip DESCRIPTION and LOCATION only in busy mode (personal→work)
+        # or when private_work_sync is enabled (work→personal).
+        if mode == "busy" or private_work_sync:
+            strip_props += [
+                ICalGLib.PropertyKind.DESCRIPTION_PROPERTY,
+                ICalGLib.PropertyKind.LOCATION_PROPERTY,
+            ]
 
         def sanitize_vevent(event):
             """Sanitize a single VEVENT component."""
@@ -141,6 +154,9 @@ class EventSanitizer:
             if mode == "busy":
                 cls._remove_all_properties(event, ICalGLib.PropertyKind.SUMMARY_PROPERTY)
                 event.add_property(ICalGLib.Property.new_summary("Busy"))
+            elif private_work_sync:
+                cls._remove_all_properties(event, ICalGLib.PropertyKind.SUMMARY_PROPERTY)
+                event.add_property(ICalGLib.Property.new_summary("Work Commitment"))
 
             # Advance DTSTART (and DTEND) to the first occurrence not excluded
             # by EXDATE, when DTSTART itself falls on an excluded date.

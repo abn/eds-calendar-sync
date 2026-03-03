@@ -78,6 +78,7 @@ def _process_creates(
             personal_uid,
             keep_reminders=config.keep_reminders,
             source_uid=work_uid,
+            private_work_sync=config.private_work_sync,
         )
 
         # Debug: Show sanitized output
@@ -139,6 +140,7 @@ def _process_updates(
             personal_uid,
             keep_reminders=config.keep_reminders,
             source_uid=work_uid,
+            private_work_sync=config.private_work_sync,
         )
         personal_client.modify_event(sanitized)
 
@@ -184,6 +186,7 @@ def _process_updates(
                 new_uid,
                 keep_reminders=config.keep_reminders,
                 source_uid=work_uid,
+                private_work_sync=config.private_work_sync,
             )
             actual_uid = personal_client.create_event(sanitized)
 

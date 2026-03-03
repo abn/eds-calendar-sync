@@ -142,6 +142,11 @@ def _load_app_config(
         if raw_keep is not None:
             keep = raw_keep.lower() in ("1", "yes", "true", "on")
 
+        raw_private = sec.get("private_work_sync")
+        private: bool | None = None
+        if raw_private is not None:
+            private = raw_private.lower() in ("1", "yes", "true", "on")
+
         pairs.append(
             CalendarPairConfig(
                 name=pair_name,
@@ -150,6 +155,7 @@ def _load_app_config(
                 sync_direction=raw_direction,
                 work_account_email=raw_email,
                 keep_reminders=keep,
+                private_work_sync=private,
             )
         )
 
@@ -160,6 +166,8 @@ def _load_app_config(
         if work_id and personal_id:
             raw_keep = global_defaults.get("keep_reminders")
             keep = raw_keep.lower() in ("1", "yes", "true", "on") if raw_keep else None
+            raw_private = global_defaults.get("private_work_sync")
+            private = raw_private.lower() in ("1", "yes", "true", "on") if raw_private else None
             pairs.append(
                 CalendarPairConfig(
                     name="default",
@@ -168,6 +176,7 @@ def _load_app_config(
                     sync_direction=global_defaults.get("sync_direction"),
                     work_account_email=global_defaults.get("work_account_email") or None,
                     keep_reminders=keep,
+                    private_work_sync=private,
                 )
             )
 
@@ -206,6 +215,13 @@ def _build_config_for_pair(
             raw = global_defaults.get("keep_reminders", "")
             keep_reminders = raw.lower() in ("1", "yes", "true", "on")
 
+    # private_work_sync: pair → global → False
+    if pair.private_work_sync is not None:
+        private_work_sync = pair.private_work_sync
+    else:
+        raw_private = global_defaults.get("private_work_sync", "")
+        private_work_sync = raw_private.lower() in ("1", "yes", "true", "on")
+
     # work_account_email: pair → global → None
     work_account_email: str | None = pair.work_account_email or (
         global_defaults.get("work_account_email") or None
@@ -226,6 +242,7 @@ def _build_config_for_pair(
         clear=clear,
         yes=yes,
         keep_reminders=keep_reminders,
+        private_work_sync=private_work_sync,
         work_account_email=work_account_email,
     )
 

@@ -81,6 +81,7 @@ def _process_new_work_event(
             mode="normal",
             keep_reminders=config.keep_reminders,
             source_uid=work_uid,
+            private_work_sync=config.private_work_sync,
         )
 
         if config.verbose:
@@ -366,6 +367,7 @@ def _process_sync_pair(
                         mode="normal",
                         keep_reminders=config.keep_reminders,
                         source_uid=work_uid,
+                        private_work_sync=config.private_work_sync,
                     )
                     personal_client.modify_event(sanitized)
 
