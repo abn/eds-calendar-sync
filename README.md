@@ -10,9 +10,9 @@ A Python utility for bidirectional synchronization of calendar events between wo
 
 - **Bidirectional Sync (Default)**: Two-way synchronization between work and personal calendars
 - **One-Way Modes**: Optional work→personal or personal→work sync only
-- **Privacy-First**: Strips sensitive data (descriptions, attendees, locations, organizers)
+- **Privacy-First**: Strips attendees, organizers, and other protocol metadata; configurable detail privacy
 - **Flexible Sanitization**:
-  - Work→Personal: Keeps event titles, strips details
+  - Work→Personal: Keeps event titles, description, and location (opt-in `private_work_sync` mode hides details)
   - Personal→Work: Replaces title with "Busy", strips everything
 - **State Tracking**: SQLite database for efficient change detection
 - **Metadata Tagging**: Events marked with CATEGORY for identification
@@ -106,6 +106,10 @@ nano ~/.config/eds-calendar-sync.conf
 [calendar-sync]
 work_calendar_id = d19280dcbb91f8ebcdbbb2adb7d502bc1d866fda
 personal_calendar_id = 02e0b7e48f4e0dbfb2c91861a8e184a75617e193
+
+# Optional: hide work event details in personal calendar
+# (replaces title with "Work Commitment", strips description and location)
+# private_work_sync = false
 ```
 
 ## Usage
@@ -163,7 +167,7 @@ eds-calendar-sync sync \
   --to-personal --yes
 ```
 
-Work events appear in personal calendar with titles and details (sanitized).
+Work events appear in personal calendar with titles, descriptions, and locations preserved.
 
 #### One-Way Sync: Personal → Work Only
 ```bash
@@ -385,7 +389,9 @@ systemctl --user disable eds-calendar-sync.timer
 Events synced from work to personal calendar:
 
 **Retained Properties:**
-- **SUMMARY**: Event title/subject (preserved)
+- **SUMMARY**: Event title/subject (preserved; replaced with "Work Commitment" when `private_work_sync` is enabled)
+- **DESCRIPTION**: Meeting details/notes (preserved; stripped when `private_work_sync` is enabled)
+- **LOCATION**: Meeting location/room (preserved; stripped when `private_work_sync` is enabled)
 - **DTSTART**: Start date/time
 - **DTEND**: End date/time
 - **RRULE**: Recurrence rules
@@ -393,8 +399,6 @@ Events synced from work to personal calendar:
 - **RDATE**: Additional recurrence dates
 
 **Stripped Properties:**
-- **DESCRIPTION**: Meeting details/notes
-- **LOCATION**: Meeting location/room
 - **ORGANIZER**: Meeting organizer (prevents CalDAV errors)
 - **ATTENDEE**: All attendees (prevents phantom emails)
 - **ATTACH**: File attachments
@@ -534,7 +538,7 @@ reconnection recovery.
 ```
 
 **Sync Behavior:**
-- **Work → Personal**: Keeps titles, strips details, adds sync marker
+- **Work → Personal**: Keeps titles, descriptions, and locations; adds sync marker (opt-in `private_work_sync` hides details)
 - **Personal → Work**: Replaces title with "Busy", strips everything, adds sync marker
 - **Loop Prevention**: Tracks separate hashes for both calendars
 - **Change Detection**: Only syncs when authoritative calendar changes
@@ -544,8 +548,8 @@ reconnection recovery.
 
 - **No Network Access**: Tool operates entirely on local EDS cache
 - **No Credentials**: Uses existing GNOME Online Accounts authentication
-- **Privacy by Default**: Strips all potentially sensitive metadata
-- **Configurable Privacy**: Personal→Work events show only "Busy"
+- **Privacy by Default**: Strips attendees, organizers, and protocol metadata; work event titles and details preserved by default
+- **Configurable Privacy**: Personal→Work events show only "Busy"; work→personal can enable `private_work_sync` to hide titles and details
 - **State Database**: Contains only UIDs and hashes, no event content
 - **Safe Operations**: Only modifies events created by this tool
 - **Confirmation Prompt**: Prevents accidental syncs (bypass with --yes)

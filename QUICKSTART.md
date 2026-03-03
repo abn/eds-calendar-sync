@@ -114,8 +114,8 @@ systemctl --user list-timers eds-calendar-sync.timer
 
 2. **Check your Personal calendar** (in GNOME Calendar or Google Calendar web):
    - You should see busy blocks from your Work calendar
-   - Titles are preserved
-   - Details, locations, and attendees are stripped
+   - Titles, descriptions, and locations are preserved
+   - Attendees and organizers are stripped
 
 3. **View logs**:
    ```bash
@@ -170,8 +170,8 @@ eds-calendar-sync refresh --yes       # Execute
 | Event Title | ✅ Kept | ❌ Replaced with "Busy" |
 | Start/End Time | ✅ Kept | ✅ Kept |
 | Recurrence Rules | ✅ Kept | ✅ Kept |
-| Description | ❌ Removed | ❌ Removed |
-| Location | ❌ Removed | ❌ Removed |
+| Description | ✅ Kept (❌ removed if `private_work_sync`) | ❌ Removed |
+| Location | ✅ Kept (❌ removed if `private_work_sync`) | ❌ Removed |
 | Attendees | ❌ Removed | ❌ Removed |
 | Organizer | ❌ Removed | ❌ Removed |
 | Reminders | ❌ Removed | ❌ Removed |
@@ -189,7 +189,9 @@ Once configured, the sync runs automatically every 15 minutes. You don't need to
 - Personal events appear in work calendar as "Busy"
 - Updated events sync automatically
 - Deleted events are removed from the mirror calendar
-- All sensitive details remain private
+- Work event titles, descriptions, and locations appear on your personal calendar
+- All attendee and organizer data remains private
+- Enable `private_work_sync` in the config to also hide work titles and details
 
 ## Need Help?
 
