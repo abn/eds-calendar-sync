@@ -515,13 +515,17 @@ def run_two_way(
             try:
                 _rid_t = _rid_prop.get_recurrenceid()
                 _rid_date = f"{_rid_t.get_year():04d}{_rid_t.get_month():02d}{_rid_t.get_day():02d}"
-                # Detect genuinely rescheduled occurrences (DTSTART date ≠ RECURRENCE-ID date).
+                # Detect rescheduled occurrences: DTSTART ≠ RECURRENCE-ID by date or time.
                 _dts_prop = _comp.get_first_property(ICalGLib.PropertyKind.DTSTART_PROPERTY)
                 _is_rescheduled = False
                 if _dts_prop:
                     _dts = _dts_prop.get_dtstart()
                     _dts_date = f"{_dts.get_year():04d}{_dts.get_month():02d}{_dts.get_day():02d}"
-                    _is_rescheduled = _dts_date != _rid_date
+                    _h, _m, _s = _rid_t.get_hour(), _rid_t.get_minute(), _rid_t.get_second()
+                    _rid_time = f"T{_h:02d}{_m:02d}{_s:02d}"
+                    _h, _m, _s = _dts.get_hour(), _dts.get_minute(), _dts.get_second()
+                    _dts_time = f"T{_h:02d}{_m:02d}{_s:02d}"
+                    _is_rescheduled = (_dts_date != _rid_date) or (_dts_time != _rid_time)
                 if _is_rescheduled:
                     # Rescheduled: sync as a standalone personal event so it appears at the
                     # new time.  Do NOT strip the master EXDATE for the original slot — it
