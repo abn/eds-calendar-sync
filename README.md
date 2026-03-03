@@ -479,6 +479,7 @@ CREATE TABLE sync_state (
     origin TEXT NOT NULL,            -- 'source' (work-authoritative) or 'target' (personal-authoritative)
     created_at INTEGER NOT NULL,     -- Unix timestamp
     last_sync_at INTEGER NOT NULL,   -- Unix timestamp
+    sanitizer_hash TEXT,             -- Hash of active sanitizer parameters; NULL triggers re-sync
     UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
 );
 ```
@@ -487,7 +488,7 @@ CREATE TABLE sync_state (
 
 **Safe direction switching:** Switching between `--to-personal`, `--to-work`, and bidirectional (default) for the same calendar pair is safe — all modes use a consistent storage convention and can coexist in the same DB.
 
-**Automatic schema migration:** If you have a state DB from an older version (before multi-pair support), it is automatically migrated on the first run. If the old DB contains `--to-work` records, a one-time `refresh` will be required (the tool will tell you).
+**Automatic schema migration:** The state DB schema evolves automatically. New columns added in upgrades are applied via `ALTER TABLE` on first connect — no manual steps required. On the first run after an upgrade that adds new columns (e.g. `sanitizer_hash`), all existing events are force-updated once so they pick up the new sanitization logic immediately. If you have a state DB from before multi-pair support, it is migrated on first run; if that old DB contains `--to-work` records, a one-time `refresh` will be required (the tool will tell you).
 
 **To reset the state** (forces full resync):
 ```bash

@@ -19,6 +19,12 @@ from gi.repository import ICalGLib  # noqa: F401 (GLib kept for version side-eff
 _RRULE_UNTIL_RE = re.compile(r"UNTIL=(\d{8})")
 _EXDATE_DATE_RE = re.compile(r"^EXDATE[^:\n]*:(\d{8})", re.MULTILINE)
 
+# Increment this when sanitization logic changes in a way that affects the
+# content of already-synced events (e.g. new fields included/excluded,
+# new property normalisations).  Stored alongside each sync record so that
+# a version bump forces a one-time re-sync of all existing events.
+SANITIZER_VERSION = 1
+
 
 class EventSanitizer:
     """Handles sanitization of calendar events per privacy spec."""

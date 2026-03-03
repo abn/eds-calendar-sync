@@ -20,6 +20,7 @@ from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh_two_way
 from eds_calendar_sync.sync.utils import build_orphan_index
 from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import compute_sanitizer_hash
 from eds_calendar_sync.sync.utils import compute_source_fingerprint
 from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_declined_by_user
@@ -39,6 +40,7 @@ def _process_new_work_event(
     state_db: StateDatabase,
     orphan_index: dict[str, str] | None = None,
     valid_exception_dates: set[str] | None = None,
+    sanitizer_hash: str | None = None,
 ):
     """Handle creation of new event in personal calendar from work."""
     personal_uid = str(uuid.uuid4())
@@ -68,7 +70,12 @@ def _process_new_work_event(
             else:
                 personal_hash = work_hash
             state_db.insert_bidirectional(
-                work_uid, existing_uid, work_hash, personal_hash, "source"
+                work_uid,
+                existing_uid,
+                work_hash,
+                personal_hash,
+                "source",
+                sanitizer_hash=sanitizer_hash,
             )
             state_db.commit()
             stats.added += 1
@@ -102,7 +109,14 @@ def _process_new_work_event(
             # Fallback if fetch fails
             personal_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "source")
+        state_db.insert_bidirectional(
+            work_uid,
+            personal_uid,
+            work_hash,
+            personal_hash,
+            "source",
+            sanitizer_hash=sanitizer_hash,
+        )
         state_db.commit()
         stats.added += 1
         logger.debug(f"Created personal event {personal_uid} from work {work_uid}")
@@ -197,6 +211,7 @@ def _process_sync_pair(
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
     work_valid_exception_dates: dict[str, set[str]] | None = None,
+    current_sanitizer_hash: str = "",
 ):
     """Process an existing sync pair (check for changes/deletions)."""
     work_uid = state_record["source_uid"]  # DB uses 'source' for work
@@ -305,6 +320,7 @@ def _process_sync_pair(
                     personal_client,
                     state_db,
                     valid_exception_dates=(work_valid_exception_dates or {}).get(work_uid, set()),
+                    sanitizer_hash=current_sanitizer_hash or None,
                 )
         return
 
@@ -340,17 +356,24 @@ def _process_sync_pair(
             logger.debug(f"  Current: {current_personal_hash}")
 
     if origin == "source":  # DB uses 'source' for work origin
-        # Work is authoritative - sync work→personal if EITHER changed
-        # This ensures manual edits to personal are overwritten
+        # Work is authoritative - sync work→personal if EITHER changed,
+        # or if the sanitizer parameters have changed since the last sync.
         work_changed = current_work_hash != stored_work_hash
         personal_changed = current_personal_hash != stored_personal_hash
+        stored_sanitizer_hash = state_record["sanitizer_hash"] or ""
+        sanitizer_changed = current_sanitizer_hash != stored_sanitizer_hash
 
-        if work_changed or personal_changed:
+        if config.verbose and sanitizer_changed:
+            logger.debug(f"Sanitizer hash changed for {work_uid}, forcing update")
+
+        if work_changed or personal_changed or sanitizer_changed:
             reason = []
             if work_changed:
                 reason.append("work changed")
             if personal_changed:
                 reason.append("personal manually edited")
+            if sanitizer_changed:
+                reason.append("sanitizer updated")
             reason_str = ", ".join(reason)
 
             if config.dry_run:
@@ -383,7 +406,11 @@ def _process_sync_pair(
                         new_personal_hash = compute_hash(new_personal_ical)
 
                     state_db.update_hashes(
-                        work_uid, personal_uid, current_work_hash, new_personal_hash
+                        work_uid,
+                        personal_uid,
+                        current_work_hash,
+                        new_personal_hash,
+                        sanitizer_hash=current_sanitizer_hash,
                     )
                     state_db.commit()
                     stats.modified += 1
@@ -563,6 +590,11 @@ def run_two_way(
         work_uids_processed = set()
         personal_uids_processed = set()
 
+        # Compute the sanitizer hash once for this run.  A mismatch with the
+        # stored value triggers a force-update of the personal event even when
+        # neither the work nor personal event content has changed.
+        current_sanitizer_hash = compute_sanitizer_hash(config)
+
         # Phase 1: Process existing sync pairs
         for state_record in state_records:
             work_uid = state_record["source_uid"]  # 'source' maps to 'work' in DB
@@ -579,6 +611,7 @@ def run_two_way(
                 personal_client,
                 state_db,
                 work_valid_exception_dates=work_valid_exception_dates,
+                current_sanitizer_hash=current_sanitizer_hash,
             )
 
             work_uids_processed.add(work_uid)
@@ -628,6 +661,7 @@ def run_two_way(
                     state_db,
                     orphan_index=personal_orphan_index,
                     valid_exception_dates=_valid_ex_dates,
+                    sanitizer_hash=current_sanitizer_hash,
                 )
 
         # Phase 3: Process new personal events (not yet synced)

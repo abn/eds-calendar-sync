@@ -20,6 +20,7 @@ from eds_calendar_sync.sanitizer import EventSanitizer
 from eds_calendar_sync.sync.refresh import perform_refresh
 from eds_calendar_sync.sync.utils import build_orphan_index
 from eds_calendar_sync.sync.utils import compute_hash
+from eds_calendar_sync.sync.utils import compute_sanitizer_hash
 from eds_calendar_sync.sync.utils import compute_source_fingerprint
 from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_declined_by_user
@@ -40,6 +41,7 @@ def _process_creates(
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
     orphan_index: dict[str, str] | None = None,
+    sanitizer_hash: str | None = None,
 ):
     """Handle creation of new events in personal calendar."""
     personal_uid = str(uuid.uuid4())
@@ -66,7 +68,12 @@ def _process_creates(
             else:
                 personal_hash = work_hash
             state_db.insert_bidirectional(
-                work_uid, existing_uid, work_hash, personal_hash, "source"
+                work_uid,
+                existing_uid,
+                work_hash,
+                personal_hash,
+                "source",
+                sanitizer_hash=sanitizer_hash,
             )
             state_db.commit()
             stats.added += 1
@@ -104,7 +111,14 @@ def _process_creates(
             # Fallback if fetch fails
             personal_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.insert_bidirectional(work_uid, personal_uid, work_hash, personal_hash, "source")
+        state_db.insert_bidirectional(
+            work_uid,
+            personal_uid,
+            work_hash,
+            personal_hash,
+            "source",
+            sanitizer_hash=sanitizer_hash,
+        )
         state_db.commit()
         stats.added += 1
         logger.debug(f"Created event {work_uid} as {personal_uid}")
@@ -127,6 +141,7 @@ def _process_updates(
     personal_uid: str,
     personal_client: EDSCalendarClient,
     state_db: StateDatabase,
+    sanitizer_hash: str | None = None,
 ):
     """Handle updates to existing events in personal calendar."""
     if config.dry_run:
@@ -153,7 +168,13 @@ def _process_updates(
             # Fallback if fetch fails
             personal_hash = compute_hash(sanitized.as_ical_string())
 
-        state_db.update_hashes(work_uid, personal_uid, work_hash, personal_hash)
+        state_db.update_hashes(
+            work_uid,
+            personal_uid,
+            work_hash,
+            personal_hash,
+            sanitizer_hash=sanitizer_hash,
+        )
         state_db.commit()
         stats.modified += 1
         logger.debug(f"Updated event {work_uid}")
@@ -204,7 +225,14 @@ def _process_updates(
 
             # Update state DB with new personal UID
             state_db.delete(work_uid)
-            state_db.insert_bidirectional(work_uid, new_uid, work_hash, personal_hash, "source")
+            state_db.insert_bidirectional(
+                work_uid,
+                new_uid,
+                work_hash,
+                personal_hash,
+                "source",
+                sanitizer_hash=sanitizer_hash,
+            )
             state_db.commit()
             stats.modified += 1
             logger.debug(f"Recreated event {work_uid} as {new_uid}")
@@ -342,6 +370,11 @@ def run_one_way_to_personal(
             except Exception:
                 pass
 
+        # Compute the sanitizer hash once for this run.  A mismatch with the
+        # stored value triggers a force-update of the personal event even when
+        # the work event content has not changed.
+        current_sanitizer_hash = compute_sanitizer_hash(config)
+
         # Process each work event
         logger.info(f"Processing {len(work_events)} work events...")
         work_uids_seen: set[str] = set()
@@ -408,9 +441,12 @@ def run_one_way_to_personal(
                     personal_client,
                     state_db,
                     orphan_index=orphan_index,
+                    sanitizer_hash=current_sanitizer_hash,
                 )
-            elif obj_hash != state[work_uid]["hash"]:
-                # UPDATE
+            elif obj_hash != state[work_uid]["hash"] or current_sanitizer_hash != (
+                state[work_uid].get("sanitizer_hash") or ""
+            ):
+                # UPDATE (work event changed OR sanitizer parameters changed)
                 _process_updates(
                     config,
                     stats,
@@ -421,6 +457,7 @@ def run_one_way_to_personal(
                     state[work_uid]["target_uid"],
                     personal_client,
                     state_db,
+                    sanitizer_hash=current_sanitizer_hash,
                 )
 
         # Process deletions

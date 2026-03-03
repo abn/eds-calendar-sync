@@ -64,10 +64,20 @@ class StateDatabase:
                 origin TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 last_sync_at INTEGER NOT NULL,
+                sanitizer_hash TEXT,
                 UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
             )
         """)
         self._commit()
+        # Add sanitizer_hash column to existing tables that pre-date this column.
+        # NULL in existing rows is intentional: it triggers a one-time re-sync so
+        # that all events pick up the current sanitizer output on the next run.
+        col_names = {
+            row["name"] for row in self._execute("PRAGMA table_info(sync_state)").fetchall()
+        }
+        if "sanitizer_hash" not in col_names:
+            self._execute("ALTER TABLE sync_state ADD COLUMN sanitizer_hash TEXT")
+            self._commit()
 
     def migrate_if_needed(self, is_refresh_or_clear: bool):
         """
@@ -118,6 +128,7 @@ class StateDatabase:
                     origin TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     last_sync_at INTEGER NOT NULL,
+                    sanitizer_hash TEXT,
                     UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
                 );
                 INSERT INTO sync_state_new
@@ -192,11 +203,14 @@ class StateDatabase:
         Keyed by source_uid (work event UID).
         """
         cursor = self._execute(
-            "SELECT source_uid, target_uid, source_hash FROM sync_state "
+            "SELECT source_uid, target_uid, source_hash, sanitizer_hash FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ? AND origin = 'source'",
             (self.work_calendar_id, self.personal_calendar_id),
         )
-        return {row[0]: {"target_uid": row[1], "hash": row[2]} for row in cursor.fetchall()}
+        return {
+            row[0]: {"target_uid": row[1], "hash": row[2], "sanitizer_hash": row[3]}
+            for row in cursor.fetchall()
+        }
 
     def get_all_state_by_target(self) -> dict[str, dict[str, str]]:
         """Retrieve personal→work sync records for this calendar pair.
@@ -215,7 +229,7 @@ class StateDatabase:
         """Retrieve all sync state records for this calendar pair."""
         cursor = self._execute(
             "SELECT id, source_uid, target_uid, source_hash, target_hash, "
-            "origin, created_at, last_sync_at FROM sync_state "
+            "origin, created_at, last_sync_at, sanitizer_hash FROM sync_state "
             "WHERE work_calendar_id = ? AND personal_calendar_id = ?",
             (self.work_calendar_id, self.personal_calendar_id),
         )
@@ -269,7 +283,13 @@ class StateDatabase:
         )
 
     def insert_bidirectional(
-        self, source_uid: str, target_uid: str, source_hash: str, target_hash: str, origin: str
+        self,
+        source_uid: str,
+        target_uid: str,
+        source_hash: str,
+        target_hash: str,
+        origin: str,
+        sanitizer_hash: str | None = None,
     ):
         """Insert new bidirectional sync record for this calendar pair.
 
@@ -284,14 +304,15 @@ class StateDatabase:
             "INSERT INTO sync_state "
             "(work_calendar_id, personal_calendar_id, "
             " source_uid, target_uid, source_hash, target_hash, "
-            " origin, created_at, last_sync_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " origin, created_at, last_sync_at, sanitizer_hash) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(work_calendar_id, personal_calendar_id, source_uid) "
             "DO UPDATE SET "
-            "    target_uid   = excluded.target_uid, "
-            "    source_hash  = excluded.source_hash, "
-            "    target_hash  = excluded.target_hash, "
-            "    last_sync_at = excluded.last_sync_at",
+            "    target_uid      = excluded.target_uid, "
+            "    source_hash     = excluded.source_hash, "
+            "    target_hash     = excluded.target_hash, "
+            "    sanitizer_hash  = excluded.sanitizer_hash, "
+            "    last_sync_at    = excluded.last_sync_at",
             (
                 self.work_calendar_id,
                 self.personal_calendar_id,
@@ -302,6 +323,7 @@ class StateDatabase:
                 origin,
                 timestamp,
                 timestamp,
+                sanitizer_hash,
             ),
         )
 
@@ -320,23 +342,53 @@ class StateDatabase:
             ),
         )
 
-    def update_hashes(self, source_uid: str, target_uid: str, source_hash: str, target_hash: str):
-        """Update both hashes after successful sync."""
-        self._execute(
-            "UPDATE sync_state "
-            "SET source_hash = ?, target_hash = ?, last_sync_at = ? "
-            "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
-            "AND source_uid = ? AND target_uid = ?",
-            (
-                source_hash,
-                target_hash,
-                int(time.time()),
-                self.work_calendar_id,
-                self.personal_calendar_id,
-                source_uid,
-                target_uid,
-            ),
-        )
+    def update_hashes(
+        self,
+        source_uid: str,
+        target_uid: str,
+        source_hash: str,
+        target_hash: str,
+        sanitizer_hash: str | None = None,
+    ):
+        """Update both hashes after successful sync.
+
+        When sanitizer_hash is provided it is stored alongside the event hashes
+        so that future runs can detect sanitizer-parameter changes and force a
+        re-sync even when the source event itself has not changed.
+        """
+        if sanitizer_hash is not None:
+            self._execute(
+                "UPDATE sync_state "
+                "SET source_hash = ?, target_hash = ?, sanitizer_hash = ?, last_sync_at = ? "
+                "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+                "AND source_uid = ? AND target_uid = ?",
+                (
+                    source_hash,
+                    target_hash,
+                    sanitizer_hash,
+                    int(time.time()),
+                    self.work_calendar_id,
+                    self.personal_calendar_id,
+                    source_uid,
+                    target_uid,
+                ),
+            )
+        else:
+            self._execute(
+                "UPDATE sync_state "
+                "SET source_hash = ?, target_hash = ?, last_sync_at = ? "
+                "WHERE work_calendar_id = ? AND personal_calendar_id = ? "
+                "AND source_uid = ? AND target_uid = ?",
+                (
+                    source_hash,
+                    target_hash,
+                    int(time.time()),
+                    self.work_calendar_id,
+                    self.personal_calendar_id,
+                    source_uid,
+                    target_uid,
+                ),
+            )
 
     def delete(self, source_uid: str):
         """Delete a sync state record by source UID for this calendar pair."""

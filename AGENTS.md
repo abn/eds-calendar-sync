@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
     origin               TEXT    NOT NULL,  -- 'source' = work authoritative, 'target' = personal authoritative
     created_at           INTEGER NOT NULL,  -- Unix timestamp of first sync
     last_sync_at         INTEGER NOT NULL,  -- Unix timestamp of last sync
+    sanitizer_hash       TEXT,              -- hash of active sanitizer parameters (NULL → force re-sync)
     UNIQUE(work_calendar_id, personal_calendar_id, source_uid)
 );
 ```
@@ -170,6 +171,37 @@ volatile server-added properties are removed to prevent false-positive change de
 
 Both the source and target hashes are stored independently. On update, the target event is fetched
 back from EDS after writing (to capture any server-added properties) and its hash is stored.
+
+### 5.4 Sanitizer Hash
+
+`sanitizer_hash` captures the active sanitizer parameters so that changes to *how* events are
+sanitized trigger a force-update even when the source event content has not changed.
+
+It is computed by `compute_sanitizer_hash(config)` in `sync/utils.py` as a `SHA256` of:
+
+```json
+{
+  "version": <SANITIZER_VERSION from sanitizer.py>,
+  "private_work_sync": <bool>,
+  "keep_reminders": <bool>
+}
+```
+
+**`SANITIZER_VERSION`** (integer constant in `sanitizer.py`) must be incremented whenever
+sanitization code changes affect the content of already-synced personal events (e.g. a new
+property is stripped or preserved, EXDATE normalization changes, etc.).
+
+**Behaviour:**
+
+- Computed once per sync run and compared against the stored value for every `origin='source'`
+  pair in Phase 1 (bidirectional) and the update condition in one-way mode.
+- A mismatch → the event is treated as changed and modified in-place (same path as a content
+  change, not a delete+recreate).
+- After a successful update, `sanitizer_hash` is written to the DB so subsequent runs skip it.
+- `NULL` in existing rows (after an upgrade that adds the column) is treated as a mismatch →
+  all events are force-updated exactly once on the first run after the upgrade.
+- Only stored for `origin='source'` (work→personal) events; personal→work events (`busy` mode)
+  always produce identical output for the same personal event content.
 
 ### 5.4 Fallback: Metadata Scan
 
@@ -507,3 +539,9 @@ specific and concrete — include the error message, the root cause, and the fix
   unconditionally; no three-way merge is attempted.
 - **EDS sexp query**: Empty string `""` is an invalid sexp on Fedora 43+ EDS and causes 30-second
   timeouts. The correct "match all" sexp is `"#t"` (boolean true).
+- **Sanitizer version**: When modifying `EventSanitizer.sanitize()` in a way that changes the
+  content of already-synced personal events (stripping or adding a new property, changing EXDATE
+  normalization, etc.), increment `SANITIZER_VERSION` in `sanitizer.py`. This causes a one-time
+  force-update of all existing personal events on the next run so they reflect the new output.
+  Do **not** bump the version for changes that only affect newly created events or that are
+  already gated by config flags captured in `compute_sanitizer_hash()`.

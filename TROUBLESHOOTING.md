@@ -171,6 +171,23 @@ nano ~/.config/eds-calendar-sync.conf
 eds-calendar-sync sync --dry-run
 ```
 
+## All Events Show as "Modified" After Upgrading
+
+After upgrading the tool, the first sync run may report `Modified: N` for every existing event
+even though nothing in the calendars has changed.
+
+**Cause**: The upgrade introduced a new `sanitizer_hash` column in the state database. Existing
+rows have `NULL` in this column, which is treated as a mismatch against the current sanitizer
+parameters. This triggers a one-time force-update of every previously-synced personal event so
+that it picks up any sanitization improvements in the new version.
+
+**Action required**: None. The second run immediately after will show `Modified: 0` because the
+sanitizer hash is now stored and matches. The force-update is intentional and harmless — events
+are modified in-place using the existing UID, so no duplicates are created.
+
+If you prefer to skip the force-update, you can run with `--dry-run` to verify the behaviour
+before it applies.
+
 ## Verbose Debugging
 
 Run with `--verbose` (before the subcommand) to see detailed operations:

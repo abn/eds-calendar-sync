@@ -3,6 +3,7 @@ Stateless event-inspection helpers.
 """
 
 import hashlib
+import json
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -19,6 +20,7 @@ from gi.repository import ICalGLib
 if TYPE_CHECKING:
     from eds_calendar_sync.db import StateDatabase
     from eds_calendar_sync.eds_client import EDSCalendarClient
+    from eds_calendar_sync.models import SyncConfig
 
 # Regex to extract the UNTIL date from an RRULE string as YYYYMMDD.
 # Works for both date-only (UNTIL=20260316) and UTC datetime
@@ -95,6 +97,22 @@ def compute_hash(ical_string: str) -> str:
 
     normalized_ical = comp.as_ical_string()
     return hashlib.sha256(normalized_ical.encode("utf-8")).hexdigest()
+
+
+def compute_sanitizer_hash(config: "SyncConfig") -> str:
+    """Hash of the effective sanitizer parameters for work→personal sync.
+
+    When this hash changes (new SANITIZER_VERSION or different config flags),
+    existing synced events are force-updated to reflect the new sanitized output.
+    """
+    from eds_calendar_sync.sanitizer import SANITIZER_VERSION
+
+    params = {
+        "version": SANITIZER_VERSION,
+        "private_work_sync": getattr(config, "private_work_sync", False),
+        "keep_reminders": getattr(config, "keep_reminders", False),
+    }
+    return hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
 
 
 def parse_component(obj) -> ICalGLib.Component:
