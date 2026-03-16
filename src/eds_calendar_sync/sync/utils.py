@@ -42,6 +42,47 @@ _M365_ERROR_DOMAIN = "e-m365-error-quark"
 _M365_NOT_FOUND_MSG = "ErrorItemNotFound"
 
 
+_M365_INVALID_BODY_MSG = "body of the item is invalid"
+
+
+def is_invalid_body_error(e: Exception) -> bool:
+    """Return True when Exchange rejects an event because the body/description is invalid.
+
+    Exchange returns ErrorInvalidRequest (HTTP 400) when a DESCRIPTION
+    contains embedded HTML, oversized content, or other problematic data.
+    Detecting this allows a targeted retry that strips DESCRIPTION/LOCATION.
+    """
+    return _M365_INVALID_BODY_MSG in str(e).lower()
+
+
+def strip_optional_text_properties(comp: ICalGLib.Component) -> None:
+    """Strip DESCRIPTION and COMMENT from every VEVENT in comp (in-place).
+
+    Used as a fallback retry when Exchange rejects with 'body of the item is invalid'.
+    DESCRIPTION and COMMENT are the two properties Exchange may use as the event body;
+    stripping both resolves the ErrorInvalidRequest without touching LOCATION, which
+    is not a body property and should remain intact.
+    """
+
+    def _strip(event):
+        for prop_kind in (
+            ICalGLib.PropertyKind.DESCRIPTION_PROPERTY,
+            ICalGLib.PropertyKind.COMMENT_PROPERTY,
+        ):
+            prop = event.get_first_property(prop_kind)
+            while prop:
+                event.remove_property(prop)
+                prop = event.get_first_property(prop_kind)
+
+    if comp.isa() == ICalGLib.ComponentKind.VCALENDAR_COMPONENT:
+        event = comp.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+        while event:
+            _strip(event)
+            event = comp.get_next_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+    elif comp.isa() == ICalGLib.ComponentKind.VEVENT_COMPONENT:
+        _strip(comp)
+
+
 def is_not_found_error(e: Exception) -> bool:
     """Return True when EDS reports that a calendar object does not exist.
 

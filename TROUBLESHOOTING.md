@@ -52,6 +52,10 @@ This was a bug fixed in v1.0. Update to latest version. The fix ensures existing
 
 If sync keeps showing "Modified: N" when nothing changed, this was a bug fixed in v1.0. The tool now correctly tracks separate hashes for work and personal events.
 
+## Synced Meeting Disappears After Declining It
+
+If you decline a meeting in your work calendar (or it is cancelled without `STATUS:CANCELLED` — e.g. with a "Canceled:" SUMMARY prefix), the next sync will **delete** the corresponding personal calendar event and count it as **Deleted 1**. This is correct behaviour: a declined or cancelled meeting no longer blocks your time, so the personal mirror is removed.
+
 ## "Modified" count after manually deleting a synced event
 
 If you delete a synced event directly from the personal (or work) calendar, the next sync will detect the missing event, silently recreate it, and count it as **Modified 1**. This is expected: the sync treats the source calendar as authoritative and restores the mirror. No warning is printed.
@@ -131,8 +135,9 @@ These are Exchange-specific rejections. Common causes and what the tool does aut
 | `ExpandSeries can only be performed against a series` | RECURRENCE-ID present (exception occurrence without master series in target) | Stripped from sanitized event |
 | `ErrorItemNotFound` (create) | `STATUS:CANCELLED`, or a recurring series where every RRULE occurrence is covered by EXDATE (Exchange rejects creating an empty series), or vendor X-properties referencing source-tenant objects | STATUS stripped; cancelled and empty-series events skipped before creation |
 | `ErrorItemNotFound` (create) — edge case | DTSTART has a timezone (e.g. `TZID=Europe/Berlin`) but UNTIL in the RRULE is a **date-only** value; libical's recurrence iterator does not reliably stop at UNTIL, generating spurious post-UNTIL occurrences that slip past the empty-series check | Fixed: UNTIL is extracted from the raw iCal string and used to cap the iterator; a timezone-free (floating) copy of DTSTART is used to avoid TZID resolution failures |
+| `ErrorInvalidRequest: body of the item is invalid` | DESCRIPTION or COMMENT contains embedded HTML, oversized content, or other data Exchange rejects as an event body. COMMENT is a secondary body fallback — Exchange uses it if DESCRIPTION is absent | Automatic retry stripping DESCRIPTION and COMMENT; LOCATION is preserved. On retry failure the sanitized iCal is logged at WARNING level for diagnosis |
 
-If errors persist, run with `--verbose` (global flag) — the sanitized iCal is printed before each create attempt, showing exactly which properties will be sent to Exchange.
+If errors persist, run with `--verbose` (global flag) — on the first failure the sanitized iCal is logged at WARNING level before the retry, showing exactly which properties were sent to Exchange.
 
 ## Calendar UIDs Changed After GOA Reconnection
 

@@ -26,9 +26,11 @@ from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_declined_by_user
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
+from eds_calendar_sync.sync.utils import is_invalid_body_error
 from eds_calendar_sync.sync.utils import is_not_found_error
 from eds_calendar_sync.sync.utils import parse_component
 from eds_calendar_sync.sync.utils import strip_exdates_for_dates
+from eds_calendar_sync.sync.utils import strip_optional_text_properties
 
 
 def _process_creates(
@@ -123,12 +125,49 @@ def _process_creates(
         stats.added += 1
         logger.debug(f"Created event {work_uid} as {personal_uid}")
     except (GLib.Error, CalendarSyncError) as e:
-        if sanitized is not None:
+        if is_invalid_body_error(e):
             logger.warning(
-                f"Sanitized iCal for failed event {work_uid}:\n{sanitized.as_ical_string()}"
+                "Exchange rejected event body for %s; sanitized iCal:\n%s",
+                work_uid,
+                sanitized.as_ical_string(),
             )
-        logger.error(f"Failed to create event {work_uid}: {e}")
-        stats.errors += 1
+            logger.warning(
+                "Retrying without DESCRIPTION/COMMENT for work event %s: %s", work_uid, e
+            )
+            try:
+                strip_optional_text_properties(sanitized)
+                actual_personal_uid = personal_client.create_event(sanitized)
+                if actual_personal_uid:
+                    personal_uid = actual_personal_uid
+                work_hash = compute_hash(ical_str)
+                created_personal = personal_client.get_event(personal_uid)
+                if created_personal:
+                    personal_hash = compute_hash(created_personal.as_ical_string())
+                else:
+                    personal_hash = compute_hash(sanitized.as_ical_string())
+                state_db.insert_bidirectional(
+                    work_uid,
+                    personal_uid,
+                    work_hash,
+                    personal_hash,
+                    "source",
+                    sanitizer_hash=sanitizer_hash,
+                )
+                state_db.commit()
+                stats.added += 1
+                logger.debug(
+                    "Created event %s as %s [DESCRIPTION stripped]", work_uid, personal_uid
+                )
+            except (GLib.Error, CalendarSyncError) as e2:
+                logger.error("Failed to create event %s even without DESCRIPTION: %s", work_uid, e2)
+                stats.errors += 1
+        else:
+            if sanitized is not None:
+                logger.warning(
+                    f"Sanitized iCal for failed event {work_uid}:\n{sanitized.as_ical_string()}"
+                )
+            logger.error(f"Failed to create event {work_uid}: {e}")
+            stats.errors += 1
 
 
 def _process_updates(
@@ -179,6 +218,42 @@ def _process_updates(
         stats.modified += 1
         logger.debug(f"Updated event {work_uid}")
     except (GLib.Error, CalendarSyncError) as e:
+        if is_invalid_body_error(e):
+            logger.warning(
+                "Exchange rejected event body for %s; sanitized iCal:\n%s",
+                work_uid,
+                sanitized.as_ical_string(),
+            )
+            logger.warning(
+                "Retrying without DESCRIPTION/COMMENT for work event %s (personal %s): %s",
+                work_uid,
+                personal_uid,
+                e,
+            )
+            try:
+                strip_optional_text_properties(sanitized)
+                personal_client.modify_event(sanitized)
+                work_hash = compute_hash(ical_str)
+                updated_personal = personal_client.get_event(personal_uid)
+                if updated_personal:
+                    personal_hash = compute_hash(updated_personal.as_ical_string())
+                else:
+                    personal_hash = compute_hash(sanitized.as_ical_string())
+                state_db.update_hashes(
+                    work_uid,
+                    personal_uid,
+                    work_hash,
+                    personal_hash,
+                    sanitizer_hash=sanitizer_hash,
+                )
+                state_db.commit()
+                stats.modified += 1
+                logger.debug("Updated event %s [DESCRIPTION stripped]", work_uid)
+            except (GLib.Error, CalendarSyncError) as e2:
+                logger.error("Failed to update event %s even without DESCRIPTION: %s", work_uid, e2)
+                stats.errors += 1
+            return  # do NOT fall through to recreate logic
+
         # "Object not found" means the personal event was deleted externally between
         # syncs.  That is a normal occurrence; recreate it silently at DEBUG level.
         # Any other modify failure is unexpected and warrants a WARNING.

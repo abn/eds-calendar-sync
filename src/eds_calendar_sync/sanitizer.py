@@ -23,7 +23,7 @@ _EXDATE_DATE_RE = re.compile(r"^EXDATE[^:\n]*:(\d{8})", re.MULTILINE)
 # content of already-synced events (e.g. new fields included/excluded,
 # new property normalisations).  Stored alongside each sync record so that
 # a version bump forces a one-time re-sync of all existing events.
-SANITIZER_VERSION = 1
+SANITIZER_VERSION = 2
 
 
 class EventSanitizer:
@@ -131,6 +131,11 @@ class EventSanitizer:
             # causes ErrorItemNotFound when the target Exchange server tries
             # to resolve those references.
             ICalGLib.PropertyKind.X_PROPERTY,
+            # COMMENT is stripped by M365 anyway (see is_managed_event comment),
+            # but stripping proactively prevents it being used as the body fallback
+            # by Exchange when DESCRIPTION is absent, which triggers
+            # ErrorInvalidRequest: body of the item is invalid.
+            ICalGLib.PropertyKind.COMMENT_PROPERTY,
         ]
 
         # Strip DESCRIPTION and LOCATION only in busy mode (personal→work)

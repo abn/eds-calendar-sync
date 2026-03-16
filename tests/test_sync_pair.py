@@ -237,3 +237,31 @@ class TestSyncPairDeletions:
         assert new_record is not None
         new_personal_uid = personal_client.creates[0]
         assert new_record["target_uid"] == new_personal_uid
+
+    def test_work_became_transparent_deletes_personal(self, state_db, sync_config, sync_logger):
+        """Work authoritative (origin='source'), work event becomes TRANSP:TRANSPARENT →
+        personal mirror is deleted and the state record removed.
+
+        This guards against the case where a previously-synced meeting is declined or
+        cancelled-without-STATUS:CANCELLED on the Exchange side (TRANSP:TRANSPARENT is set).
+        Trying to update the personal copy in that state causes Exchange to reject with
+        'body of the item is invalid' even when DESCRIPTION/COMMENT are absent.
+        """
+        work_uid = "W_BECAME_TRANSPARENT"
+        personal_uid = "P_MIRROR_TRANSPARENT"
+        self._seed(state_db, work_uid, personal_uid, "source")
+
+        # Work event now has TRANSP:TRANSPARENT (e.g. user declined the meeting)
+        work_client = FakeCalendarClient({work_uid: make_transparent_vevent(work_uid)})
+        personal_client = FakeCalendarClient({personal_uid: make_vevent(personal_uid)})
+
+        stats = _run(sync_config, sync_logger, work_client, personal_client, state_db)
+
+        assert personal_uid in personal_client.removes, (
+            "Personal mirror must be removed when the work event becomes transparent"
+        )
+        assert state_db.get_by_source_uid(work_uid) is None, (
+            "State record must be cleaned up after personal mirror is deleted"
+        )
+        assert stats.deleted == 1
+        assert stats.errors == 0

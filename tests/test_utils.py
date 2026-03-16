@@ -20,6 +20,7 @@ from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
 from eds_calendar_sync.sync.utils import is_not_found_error
 from eds_calendar_sync.sync.utils import strip_exdates_for_dates
+from eds_calendar_sync.sync.utils import strip_optional_text_properties
 
 # ---------------------------------------------------------------------------
 # Module-level iCal construction helpers
@@ -593,3 +594,68 @@ class TestIsDeclinedByUser:
             )
         )
         assert is_declined_by_user(comp, self._USER) is False
+
+
+# ---------------------------------------------------------------------------
+# TestStripOptionalTextProperties
+# ---------------------------------------------------------------------------
+
+
+def _vevent_with_props(uid: str, extra_lines: list[str]) -> str:
+    lines = (
+        [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            "SUMMARY:Test",
+            f"DTSTART:{_DTSTART}",
+            f"DTEND:{_DTEND}",
+            f"DTSTAMP:{_DTSTAMP}",
+        ]
+        + extra_lines
+        + ["END:VEVENT"]
+    )
+    return "\r\n".join(lines) + "\r\n"
+
+
+class TestStripOptionalTextProperties:
+    """strip_optional_text_properties removes DESCRIPTION and COMMENT but preserves LOCATION."""
+
+    def test_strips_description(self):
+        comp = _parse(_vevent_with_props("SOP1", ["DESCRIPTION:Meeting notes"]))
+        strip_optional_text_properties(comp)
+        assert comp.get_first_property(ICalGLib.PropertyKind.DESCRIPTION_PROPERTY) is None
+
+    def test_strips_comment(self):
+        comp = _parse(_vevent_with_props("SOP2", ["COMMENT:Teams boilerplate HTML"]))
+        strip_optional_text_properties(comp)
+        assert comp.get_first_property(ICalGLib.PropertyKind.COMMENT_PROPERTY) is None
+
+    def test_preserves_location(self):
+        comp = _parse(_vevent_with_props("SOP3", ["LOCATION:Microsoft Teams Meeting"]))
+        strip_optional_text_properties(comp)
+        assert comp.get_first_property(ICalGLib.PropertyKind.LOCATION_PROPERTY) is not None
+
+    def test_strips_description_and_comment_together(self):
+        comp = _parse(
+            _vevent_with_props(
+                "SOP4",
+                ["DESCRIPTION:Notes", "COMMENT:Boilerplate", "LOCATION:Room 42"],
+            )
+        )
+        strip_optional_text_properties(comp)
+        assert comp.get_first_property(ICalGLib.PropertyKind.DESCRIPTION_PROPERTY) is None
+        assert comp.get_first_property(ICalGLib.PropertyKind.COMMENT_PROPERTY) is None
+        assert comp.get_first_property(ICalGLib.PropertyKind.LOCATION_PROPERTY) is not None
+
+    def test_noop_when_no_matching_properties(self):
+        comp = _parse(_vevent_with_props("SOP5", []))
+        strip_optional_text_properties(comp)  # must not raise
+        assert comp.get_first_property(ICalGLib.PropertyKind.SUMMARY_PROPERTY) is not None
+
+    def test_works_on_vcalendar_wrapper(self):
+        vevent = _vevent_with_props("SOP6", ["DESCRIPTION:Notes", "COMMENT:Boilerplate"])
+        vcal = _parse(_wrap_vcalendar(vevent))
+        strip_optional_text_properties(vcal)
+        vevent_comp = vcal.get_first_component(ICalGLib.ComponentKind.VEVENT_COMPONENT)
+        assert vevent_comp.get_first_property(ICalGLib.PropertyKind.DESCRIPTION_PROPERTY) is None
+        assert vevent_comp.get_first_property(ICalGLib.PropertyKind.COMMENT_PROPERTY) is None

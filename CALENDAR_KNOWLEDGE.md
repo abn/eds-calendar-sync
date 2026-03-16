@@ -162,6 +162,16 @@ These properties reference internal Exchange objects in the **source tenant**. W
 | `METHOD:CANCEL` or `METHOD:REQUEST` in `VCALENDAR` | Exchange treats the create as a meeting-flow operation | Strip `METHOD` from the `VCALENDAR` wrapper |
 | DTSTART has `TZID` but RRULE `UNTIL` is date-only | libical's `RecurIterator` may emit spurious post-UNTIL occurrences, slipping past the empty-series check | Parse `UNTIL` from raw iCal string and cap the iterator manually |
 
+### ErrorInvalidRequest: Body of the Item is Invalid
+
+Exchange returns `ErrorInvalidRequest` (HTTP 400) with the message "body of the item is invalid" when the event body content is rejected:
+- `DESCRIPTION` contains embedded HTML (e.g. a Teams meeting boilerplate block)
+- `DESCRIPTION` is absent but `COMMENT` is present — Exchange uses `COMMENT` as a body fallback and applies the same validation
+
+**Fix**: Retry without `DESCRIPTION` and `COMMENT`. `LOCATION` is not a body property and must **not** be stripped in the retry. The sanitizer also strips `COMMENT` proactively on every sync (it is stripped by M365 on round-trip anyway) so that Teams meeting HTML in `COMMENT` never reaches Exchange.
+
+The retry path logs the sanitized iCal at WARNING level before stripping, making the problematic content visible for diagnosis without needing to reproduce.
+
 ### ExpandSeries Error on Create
 
 `ExpandSeries can only be performed against a series` — returned when an exception VEVENT (containing `RECURRENCE-ID`) is created in a target calendar that does not have the master recurring series. Fix: strip `RECURRENCE-ID` before creating in the target calendar.
@@ -532,10 +542,11 @@ Commit the state DB after each successful create/modify/delete, not once at the 
 |---|---|---|
 | `e-m365-error-quark: Cannot create calendar object: ErrorItemNotFound (2)` | Exchange M365 EDS backend | See §3 for causes. Most common: STATUS:CANCELLED, empty recurring series, X-properties, METHOD present. |
 | `ExpandSeries can only be performed against a series. (400)` | Exchange EWS | RECURRENCE-ID present without master series. Strip RECURRENCE-ID. |
+| `ErrorInvalidRequest: body of the item is invalid. (400)` | Exchange EWS | DESCRIPTION or COMMENT contains HTML/oversized content. Automatic retry strips DESCRIPTION and COMMENT (LOCATION is preserved). |
 | `e-cal-client-error-quark` code 1 | EDS generic | Object not found (event was externally deleted). Handle silently. |
 | `unable to open database file` | SQLite via EDS systemd service | ReadWritePaths covers file but not parent dir. Fix: point ReadWritePaths at parent directory. |
 | `Read-only calendars can't be modified` | EDS | Calendar is read-only (e.g. Birthdays). Check writability before sync. |
 
 ---
 
-*Last updated: 2026-02-24*
+*Last updated: 2026-03-16*

@@ -26,8 +26,10 @@ from eds_calendar_sync.sync.utils import has_valid_occurrences
 from eds_calendar_sync.sync.utils import is_declined_by_user
 from eds_calendar_sync.sync.utils import is_event_cancelled
 from eds_calendar_sync.sync.utils import is_free_time
+from eds_calendar_sync.sync.utils import is_invalid_body_error
 from eds_calendar_sync.sync.utils import parse_component
 from eds_calendar_sync.sync.utils import strip_exdates_for_dates
+from eds_calendar_sync.sync.utils import strip_optional_text_properties
 
 
 def _process_new_work_event(
@@ -121,8 +123,50 @@ def _process_new_work_event(
         stats.added += 1
         logger.debug(f"Created personal event {personal_uid} from work {work_uid}")
     except (GLib.Error, CalendarSyncError) as e:
-        logger.error(f"Failed to create personal event from {work_uid}: {e}")
-        stats.errors += 1
+        if is_invalid_body_error(e):
+            logger.warning(
+                "Exchange rejected event body for %s; sanitized iCal:\n%s",
+                work_uid,
+                sanitized.as_ical_string(),
+            )
+            logger.warning(
+                "Retrying without DESCRIPTION/COMMENT for work event %s: %s", work_uid, e
+            )
+            try:
+                strip_optional_text_properties(sanitized)
+                actual_personal_uid = personal_client.create_event(sanitized)
+                if actual_personal_uid:
+                    personal_uid = actual_personal_uid
+                work_hash = compute_hash(work_ical)
+                created = personal_client.get_event(personal_uid)
+                personal_hash = compute_hash(
+                    created.as_ical_string() if created else sanitized.as_ical_string()
+                )
+                state_db.insert_bidirectional(
+                    work_uid,
+                    personal_uid,
+                    work_hash,
+                    personal_hash,
+                    "source",
+                    sanitizer_hash=sanitizer_hash,
+                )
+                state_db.commit()
+                stats.added += 1
+                logger.debug(
+                    "Created personal event %s from work %s [DESCRIPTION stripped]",
+                    personal_uid,
+                    work_uid,
+                )
+            except (GLib.Error, CalendarSyncError) as e2:
+                logger.error(
+                    "Failed to create personal event from %s even without DESCRIPTION: %s",
+                    work_uid,
+                    e2,
+                )
+                stats.errors += 1
+        else:
+            logger.error(f"Failed to create personal event from {work_uid}: {e}")
+            stats.errors += 1
 
 
 def _process_new_personal_event(
@@ -356,6 +400,30 @@ def _process_sync_pair(
             logger.debug(f"  Current: {current_personal_hash}")
 
     if origin == "source":  # DB uses 'source' for work origin
+        # If the work event has become transparent (declined/free-time), the
+        # personal copy no longer serves a purpose — delete it and clean up
+        # state so we don't keep retrying a doomed update.
+        if is_free_time(work_comp):
+            if config.dry_run:
+                logger.info(
+                    f"[DRY RUN] [WORK→PERSONAL] Would DELETE: {personal_uid} "
+                    f"(work event {work_uid} became transparent)"
+                )
+                stats.deleted += 1
+            else:
+                try:
+                    personal_client.remove_event(personal_uid)
+                    logger.debug(
+                        f"Deleted personal {personal_uid} (work {work_uid} became transparent)"
+                    )
+                    stats.deleted += 1
+                except (GLib.Error, CalendarSyncError) as e:
+                    logger.error(f"Failed to delete personal {personal_uid}: {e}")
+                    stats.errors += 1
+                state_db.delete_by_pair(work_uid, personal_uid)
+                state_db.commit()
+            return
+
         # Work is authoritative - sync work→personal if EITHER changed,
         # or if the sanitizer parameters have changed since the last sync.
         work_changed = current_work_hash != stored_work_hash
@@ -418,8 +486,51 @@ def _process_sync_pair(
                         f"Updated personal {personal_uid} from work {work_uid} ({reason_str})"
                     )
                 except (GLib.Error, CalendarSyncError) as e:
-                    logger.error(f"Failed to update personal {personal_uid}: {e}")
-                    stats.errors += 1
+                    if is_invalid_body_error(e):
+                        logger.warning(
+                            "Exchange rejected event body for %s; sanitized iCal:\n%s",
+                            work_uid,
+                            sanitized.as_ical_string(),
+                        )
+                        logger.warning(
+                            "Retrying without DESCRIPTION/COMMENT for work event %s "
+                            "(personal %s): %s",
+                            work_uid,
+                            personal_uid,
+                            e,
+                        )
+                        try:
+                            strip_optional_text_properties(sanitized)
+                            personal_client.modify_event(sanitized)
+                            updated = personal_client.get_event(personal_uid)
+                            new_personal_hash = compute_hash(
+                                updated.as_ical_string() if updated else sanitized.as_ical_string()
+                            )
+                            state_db.update_hashes(
+                                work_uid,
+                                personal_uid,
+                                current_work_hash,
+                                new_personal_hash,
+                                sanitizer_hash=current_sanitizer_hash,
+                            )
+                            state_db.commit()
+                            stats.modified += 1
+                            logger.debug(
+                                "Updated personal %s from work %s (%s) [DESCRIPTION stripped]",
+                                personal_uid,
+                                work_uid,
+                                reason_str,
+                            )
+                        except (GLib.Error, CalendarSyncError) as e2:
+                            logger.error(
+                                "Failed to update personal %s even without DESCRIPTION: %s",
+                                personal_uid,
+                                e2,
+                            )
+                            stats.errors += 1
+                    else:
+                        logger.error(f"Failed to update personal {personal_uid}: {e}")
+                        stats.errors += 1
 
     elif origin == "target":  # DB uses 'target' for personal origin
         # Personal is authoritative - sync personal→work if EITHER changed

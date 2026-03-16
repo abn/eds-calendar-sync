@@ -188,6 +188,22 @@ class TestSanitizePropertyStripping:
         )
         assert not _has_property(result, ICalGLib.PropertyKind.X_PROPERTY)
 
+    def test_strips_comment_in_normal_mode(self):
+        """COMMENT is always stripped (M365 strips it anyway; prevents body-fallback rejection)."""
+        result = _sanitize(_make_vevent("SC1", ["COMMENT:Teams boilerplate"]))
+        assert not _has_property(result, ICalGLib.PropertyKind.COMMENT_PROPERTY)
+
+    def test_strips_comment_in_busy_mode(self):
+        result = _sanitize(_make_vevent("SC2", ["COMMENT:HTML body"]), mode="busy")
+        assert not _has_property(result, ICalGLib.PropertyKind.COMMENT_PROPERTY)
+
+    def test_strips_comment_in_private_work_sync(self):
+        result = _sanitize(
+            _make_vevent("SC3", ["COMMENT:Confidential"]),
+            private_work_sync=True,
+        )
+        assert not _has_property(result, ICalGLib.PropertyKind.COMMENT_PROPERTY)
+
     def test_strips_status(self):
         result = _sanitize(_make_vevent("SS1", ["STATUS:CONFIRMED"]))
         assert not _has_property(result, ICalGLib.PropertyKind.STATUS_PROPERTY)
