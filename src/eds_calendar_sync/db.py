@@ -44,8 +44,9 @@ class StateDatabase:
         """Initialize and connect to the state database."""
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(str(self.db_path))
+            self.conn = sqlite3.connect(str(self.db_path), timeout=30)
             self.conn.row_factory = sqlite3.Row  # Enable column access by name
+            self.conn.execute("PRAGMA journal_mode=WAL")
         except (OSError, sqlite3.Error) as e:
             raise CalendarSyncError(f"Cannot open state database {self.db_path}: {e}") from e
         self._init_schema()

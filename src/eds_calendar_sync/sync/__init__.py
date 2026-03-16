@@ -2,7 +2,10 @@
 CalendarSynchronizer — thin orchestrator that delegates to sync submodules.
 """
 
+import fcntl
+import hashlib
 import logging
+from pathlib import Path
 
 import gi
 
@@ -27,8 +30,36 @@ class CalendarSynchronizer:
         self.logger = logging.getLogger(__name__)
         self.stats = SyncStats()
 
+    def _pair_lock_path(self) -> Path:
+        def _h(s: str) -> str:
+            return hashlib.sha256(s.encode()).hexdigest()[:12]
+
+        name = (
+            f"eds-cs-{_h(self.config.work_calendar_id)}-{_h(self.config.personal_calendar_id)}.lock"
+        )
+        return self.config.state_db_path.parent / name
+
     def run(self) -> SyncStats:
         """Execute the synchronization process."""
+        lock_path = self._pair_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("w")
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.logger.warning(
+                "Sync for this calendar pair is already running (%s held) — exiting.", lock_path
+            )
+            lock_file.close()
+            return self.stats
+        try:
+            return self._run_locked()
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            lock_file.close()
+
+    def _run_locked(self) -> SyncStats:
+        """Execute the synchronization process (called with the pair lock held)."""
         self.logger.info("Connecting to Evolution Data Server...")
         registry = EDataServer.SourceRegistry.new_sync(None)
 
